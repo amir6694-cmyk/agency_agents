@@ -263,7 +263,7 @@ Settle the agent count and the protocol-flag contradiction, then replace the gat
 
 **Coverage is a regression guard, not a correctness signal.** Measured 81% on the gated packages against a 65% floor. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
 
-**Python floor is 3.9, not 3.8.** Ten modules use PEP 585 builtin generics (`list[tuple]`, `dict[str, str]`) in runtime-evaluated annotations without `from __future__ import annotations`, so 3.8 aborts collection with import errors before any test runs. `setup.py` declares `>=3.9` accordingly.
+**Python floor is 3.9, not 3.8.** Ten modules use PEP 585 builtin generics (`list[tuple]`, `dict[str, str]`) in runtime-evaluated annotations without `from __future__ import annotations`, so 3.8 aborts collection with import errors before any test runs. `setup.py` declares `>=3.9` accordingly. The 3.9 job runs on `ubuntu-24.04` rather than `ubuntu-latest`: the 26.04 image has no 3.9 build for `setup-python`, so the floor is tested on the last image that ships it.
 
 ---
 

@@ -16,7 +16,9 @@ concurrency:
 jobs:
   tests:
     name: "tests (narrow: hackingtool + second_brain)"
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, for which setup-python has no 3.9 build, and 3.9 is
+    # the floor setup.py declares. The floor is tested on the last image that ships it.
+    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
