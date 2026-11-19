@@ -35,6 +35,19 @@ class TestSummarise:
         assert summary.dropped["date"] == 1
         assert summarise(rows, today, months=6).used == 2
 
+    def test_window_is_counted_to_the_day(self, today):
+        inside = row(1_500_000, 750, "2026-08-19")
+        outside = row(1_900_000, 750, "2026-08-18")
+        summary = summarise([inside, outside], today, months=3)
+        assert summary.used == 1 and summary.dropped["date"] == 1
+
+    def test_window_handles_short_months_and_year_ends(self):
+        from datetime import date
+
+        rows = [row(1, 1, "2025-11-30"), row(1, 1, "2025-11-29")]
+        assert summarise(rows, date(2026, 2, 28), months=3).used == 2
+        assert summarise(rows, date(2026, 3, 31), months=4).used == 1
+
     def test_window_can_be_widened(self, today):
         rows = [row(1_500_000, 750, "2026-10-30"), row(1_900_000, 750, "2025-08-01")]
         summary = summarise(rows, today, months=6)

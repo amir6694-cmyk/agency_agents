@@ -4,7 +4,7 @@ from html import escape
 from typing import Any, Dict, List, Optional
 
 from .costs import RATES_AS_OF
-from .messages import UI, aed, pct, render
+from .messages import UI, aed, long_date, pct, render
 from .scoring import Assessment, Result
 
 PALETTE = {"navy": "#071522", "panel": "#0E2233", "line": "#1E3A52", "gold": "#C9A45D", "ivory": "#F2EBDD", "mute": "#8FA0AD"}
@@ -15,7 +15,7 @@ def _unit_line(a: Assessment, t: Dict[str, str]) -> str:
     listing = a.listing
     parts: List[str] = []
     if listing.property_type:
-        parts.append(listing.property_type.replace("_", " "))
+        parts.append(t.get(f"type.{listing.property_type}", listing.property_type.replace("_", " ")))
     if listing.bedrooms is not None:
         parts.append(t["studio"] if listing.bedrooms == 0 else f"{listing.bedrooms} {t['beds']}")
     if listing.size_sqft:
@@ -25,12 +25,12 @@ def _unit_line(a: Assessment, t: Dict[str, str]) -> str:
     if listing.handover and listing.completion == "offplan":
         parts.append(f"{t['handover']} {listing.handover}")
     if listing.emirate:
-        parts.append(listing.emirate.replace("_", " ").title())
+        parts.append(t[f"emirate.{listing.emirate}"])
     return " · ".join(parts)
 
 
-def _share(value: Optional[float], t: Dict[str, str], signed: bool = False) -> str:
-    return t["unknown"] if value is None else pct(value, signed=signed)
+def _share(value: Optional[float], lang: str, signed: bool = False) -> str:
+    return UI[lang]["unknown"] if value is None else pct(value, signed=signed, lang=lang)
 
 
 def _brief_line(result: Result, lang: str) -> str:
@@ -41,7 +41,7 @@ def _brief_line(result: Result, lang: str) -> str:
         budget = f"{aed(brief.budget_min, lang)} – {budget}"
     if brief.budget_includes_costs:
         budget += f" ({t['budget_with_costs']})"
-    where = ", ".join(brief.areas) or ", ".join(e.replace("_", " ").title() for e in brief.emirates) or t["anywhere"]
+    where = ", ".join(brief.areas) or ", ".join(t[f"emirate.{e}"] for e in brief.emirates) or t["anywhere"]
     return (
         f"{t['budget']}: {budget} · {t['market']}: {t['market.' + brief.market]} · "
         f"{t['purpose']}: {t['purpose.' + brief.purpose]} · {t['where']}: {where}"
@@ -111,7 +111,7 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
     lines = [
         f"# {t['title']}",
         "",
-        f"{t['as_of']} {data['as_of']}. {_brief_line(result, lang)}",
+        f"{t['as_of']} {long_date(result.as_of, lang)}. {_brief_line(result, lang)}",
         "",
         f"{t['received']}: {counts['received']} · {t['unique']}: {counts['unique']} · "
         f"{t['ranked']}: {counts['ranked']} · {t['shortlisted']}: {counts['shortlisted']} · "
@@ -128,8 +128,8 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
             "",
             _unit_line(a, t),
             "",
-            f"- {t['price']}: {aed(listing.price_aed, lang)} ({psf} {t['psf']}; {_share(a.benchmark_gap, t, signed=True)} {t['gap']})",
-            f"- {t['gross_yield']}: {_share(a.gross_yield, t)} · {t['net_yield']}: {_share(a.net_yield, t)}",
+            f"- {t['price']}: {aed(listing.price_aed, lang)} ({psf} {t['psf']}; {_share(a.benchmark_gap, lang, signed=True)} {t['gap']})",
+            f"- {t['gross_yield']}: {_share(a.gross_yield, lang)} · {t['net_yield']}: {_share(a.net_yield, lang)}",
             f"- {t['outlay']}: {aed(a.costs.total_outlay, lang)}",
         ]
         if a.costs.loan:
@@ -199,9 +199,9 @@ def _card(index: int, a: Assessment, result: Result, lang: str) -> str:
     figures = [
         (t["price"], aed(listing.price_aed, lang)),
         (t["psf"], psf),
-        (t["gap"], _share(a.benchmark_gap, t, signed=True)),
-        (t["gross_yield"], _share(a.gross_yield, t)),
-        (t["net_yield"], _share(a.net_yield, t)),
+        (t["gap"], _share(a.benchmark_gap, lang, signed=True)),
+        (t["gross_yield"], _share(a.gross_yield, lang)),
+        (t["net_yield"], _share(a.net_yield, lang)),
         (t["outlay"], aed(a.costs.total_outlay, lang)),
     ]
     if a.costs.loan:
@@ -267,11 +267,11 @@ def to_html(result: Result, lang: str = "en", top: Optional[int] = None) -> str:
     return (
         f"<!doctype html><html lang='{lang}'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{t['title']} — {data['as_of']}</title>"
+        f"<title>{t['title']} — {long_date(result.as_of, lang)}</title>"
         "<link rel='preconnect' href='https://fonts.googleapis.com'>"
         "<link href='https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Manrope:wght@400;500;600&display=swap' rel='stylesheet'>"
         f"<style>{_CSS}</style></head><body><main>"
-        f"<div class='eyebrow'>{t['subtitle']} · {t['as_of']} {data['as_of']}</div>"
+        f"<div class='eyebrow'>{t['subtitle']} · {t['as_of']} {long_date(result.as_of, lang)}</div>"
         f"<h1>{t['title']}</h1><div class='rule'></div>{client}"
         f"<p class='brief'>{escape(_brief_line(result, lang))}</p><div class='stats'>{stats}</div>"
         f"{cards}{rejected}"

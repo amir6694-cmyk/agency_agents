@@ -292,7 +292,7 @@ python -m property_scout score --brief brief.json --listings listings.json --for
 python -m property_scout score --brief brief.json --listings listings.json --format html --lang ru --out shortlist.html
 ```
 
-Fill one listing record per offer. `url`, `price_aed` and `evidence` are required: `evidence` is `page`, `card` or `lead` as defined in the rules, and for a card the `url` is the search page that shows it. Leave any other field empty when the source does not state it. Put the page a figure came from in `sources`, the date you saw the page in `observed_on`, and the basis of each benchmark in `benchmark_basis` and `rent_basis` (source, count, period). Tags the brief can match as must-haves or exclusions are free text; use plain ones such as `sea_view`, `high_floor`, `vacant`, `tenanted`, `furnished`, `upgraded`, `private_pool`, `maids_room`.
+Fill one listing record per offer. `url`, `price_aed` and `evidence` are required: `evidence` is `page`, `card` or `lead` as defined in the rules, and for a card the `url` is the search page that shows it. Leave any other field empty when the source does not state it. Put the page a figure came from in `sources`, the date you saw the page in `observed_on`, and the basis of each benchmark in `benchmark_basis` and `rent_basis` (source, count, period), written in the language of the client report because the report prints them as they are. Copy the number of comparables the `comps` command used into `benchmark_count`; under five, the engine marks the benchmark as thin. Tags the brief can match as must-haves or exclusions are free text; use plain ones such as `sea_view`, `high_floor`, `vacant`, `tenanted`, `furnished`, `upgraded`, `private_pool`, `maids_room`.
 
 ### Rubric
 
@@ -314,7 +314,7 @@ Each criterion scores 0 to 100. A criterion with no data counts as a neutral 50 
 | `golden_visa` | 30% | 15% | 20% | 30% | 5% |
 | `balanced` | 30% | 25% | 15% | 25% | 5% |
 
-Verdicts: **shortlist** at a score of 65 or more with evidence of 60% or more; **consider** from 50; **pass** below that; **verify first** whenever a critical flag is raised, whatever the score. A price 30% or more below its benchmark is a critical flag, not a bargain: confirm the unit exists and the size is right. So is an off-plan project you looked for in the register and did not find, and so is every `lead`.
+Verdicts: **shortlist** at a score of 65 or more; **consider** from 50; **pass** below that. An offer whose evidence is under 60% is **needs data**, whatever its score, and is listed after every rated offer: close the gap (usually a benchmark or a rent figure) or present it as unrated. **Verify first** applies whenever a critical flag is raised, and such offers come last. A price 30% or more below its benchmark is a critical flag, not a bargain: confirm the unit exists and the size is right. So is an off-plan project you looked for in the register and did not find, and so is every `lead`.
 
 Offers that match on building, bedrooms, size within 2% and price within 5% are folded into one, cheapest advert kept; they are the same unit or an identical one. Without a shell, apply the tables above by hand and say that the ranking was computed manually.
 

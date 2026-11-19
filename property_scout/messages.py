@@ -1,6 +1,7 @@
 """Every sentence the engine can say, in English and Russian, keyed by a stable code."""
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Dict
 
 LANGUAGES = ("en", "ru")
@@ -18,8 +19,19 @@ def aed(value: float, lang: str = "en") -> str:
     return f"AED {value:,.0f}"
 
 
-def pct(value: float, signed: bool = False) -> str:
-    return f"{value * 100:+.1f}%" if signed else f"{value * 100:.1f}%"
+MONTHS_EN = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+
+def long_date(day: date, lang: str = "en") -> str:
+    if lang == "ru":
+        return day.strftime("%d.%m.%Y")
+    return f"{day.day} {MONTHS_EN[day.month - 1]} {day.year}"
+
+
+def pct(value: float, signed: bool = False, lang: str = "en") -> str:
+    text = f"{value * 100:+.1f}%" if signed else f"{value * 100:.1f}%"
+    text = text.replace("-", "\u2212")
+    return text.replace(".", ",") if lang == "ru" else text
 
 
 TEXT: Dict[str, Dict[str, str]] = {
@@ -66,6 +78,7 @@ TEXT: Dict[str, Dict[str, str]] = {
         "flag.tenanted": "tenanted: vacant possession depends on the tenancy and statutory notice",
         "flag.costs_exceed_budget": "price fits, but with acquisition costs the outlay is {outlay}",
         "flag.no_benchmark": "no sold-price benchmark supplied: the price is an asking price only",
+        "flag.thin_benchmark": "the benchmark rests on {count} sales: too few to lean on, widen the comparables or treat the gap as indicative",
         "flag.projected_rent": "rent is a projection for an unbuilt unit, not an achieved figure",
         "flag.not_dated": "no date recorded for when the listing was seen live",
         "flag.cost_rates_unknown": "this emirate publishes no fee schedule: the outlay shown is the price only, obtain a written quote",
@@ -92,7 +105,7 @@ TEXT: Dict[str, Dict[str, str]] = {
         "cost.mortgage_registration": "Mortgage registration, {rate} of the loan plus a fixed fee",
     },
     "ru": {
-        "value.scored": "{psf}/кв.фут — {gap} к бенчмарку {benchmark}/кв.фут{basis}",
+        "value.scored": "{psf}/кв. фут — {gap} к бенчмарку {benchmark}/кв. фут{basis}",
         "value.no_size": "не оценено: площадь не указана",
         "value.no_benchmark": "не оценено: нет бенчмарка по ценам сделок",
         "yield.net": "чистая {net}, валовая {gross}{basis}",
@@ -102,7 +115,7 @@ TEXT: Dict[str, Dict[str, str]] = {
         "fit.area_hit": "в предпочтительном районе",
         "fit.area_miss": "вне предпочтительных районов",
         "fit.must_have": "подтверждено обязательных условий: {met}/{wanted}",
-        "fit.size": "{size} кв.футов при запросе от {wanted}",
+        "fit.size": "{size} кв. футов при запросе от {wanted}",
         "fit.handover_ok": "сдача в срок",
         "fit.handover_late": "сдача на {late} мес. позже срока",
         "trust.evidence_page": "страница объявления открыта",
@@ -124,7 +137,7 @@ TEXT: Dict[str, Dict[str, str]] = {
         "flag.implausible_price": "цена {gap} к бенчмарку: до любых выводов подтвердить, что объект существует, площадь верна и это не приманка",
         "flag.registration_not_found": "регистрация проекта или эскроу-счёт не найдены: не двигаться дальше, пока застройщик их не предоставит",
         "flag.completion_unknown": "статус готовности не указан: цены строящегося и готового жилья несопоставимы",
-        "flag.size_missing": "площадь не указана: цену за кв.фут и выгодность оценить нельзя",
+        "flag.size_missing": "площадь не указана: цену за кв. фут и выгодность оценить нельзя",
         "flag.no_permit": "номер разрешения на рекламу не зафиксирован: до контакта отсканировать QR-код объявления или запросить номер у брокера",
         "flag.stale": "объявлению {days} дн.: возможно, продано — либо есть пространство для торга",
         "flag.registration_unchecked": "регистрация проекта и эскроу-счёт ещё не проверены",
@@ -134,6 +147,7 @@ TEXT: Dict[str, Dict[str, str]] = {
         "flag.tenanted": "объект с арендатором: освобождение зависит от договора аренды и срока уведомления",
         "flag.costs_exceed_budget": "цена проходит, но с расходами на сделку итог {outlay}",
         "flag.no_benchmark": "бенчмарк по сделкам не предоставлен: это только цена предложения",
+        "flag.thin_benchmark": "бенчмарк опирается на {count} сделки(ок): этого мало, расширить выборку или считать разницу ориентировочной",
         "flag.projected_rent": "аренда — прогноз для непостроенного объекта, а не фактическая ставка",
         "flag.not_dated": "не записана дата, когда объявление было активно",
         "flag.cost_rates_unknown": "этот эмират не публикует тарифы: в итоге только цена, нужен письменный расчёт",
@@ -173,11 +187,12 @@ def render(note: Note, lang: str = "en") -> str:
         if key in MONEY_PARAMS:
             shown[key] = aed(value, lang)
         elif key in SIGNED_PARAMS:
-            shown[key] = pct(value, signed=True)
+            shown[key] = pct(value, signed=True, lang=lang)
         elif key in SHARE_PARAMS:
-            shown[key] = pct(value)
+            shown[key] = pct(value, lang=lang)
         elif key in RATE_PARAMS:
-            shown[key] = f"{value * 100:.4g}%"
+            rate = f"{value * 100:.4g}%"
+            shown[key] = rate.replace(".", ",") if lang == "ru" else rate
         elif key == "basis":
             shown[key] = f" ({value})" if value else ""
         elif isinstance(value, float):
@@ -234,7 +249,8 @@ UI: Dict[str, Dict[str, str]] = {
         "method_text": (
             "Each unit is scored from 0 to 100 on value (asking price per sqft against a sold-price benchmark), "
             "yield, fit to the brief, trust (permit, verification, recency, developer and registration for off-plan) "
-            "and payment terms. A criterion with no data counts as a neutral 50 and lowers the evidence figure. "
+            "and payment terms. A criterion with no data counts as a neutral 50 and lowers the evidence figure; "
+            "offers with too little evidence are listed after the rated ones, whatever their score. "
             "Asking prices are not transaction prices. Costs are estimates from published fee schedules as of {rates_as_of}; "
             "confirm every figure against official sources before committing funds."
         ),
@@ -245,6 +261,21 @@ UI: Dict[str, Dict[str, str]] = {
         "verdict.consider": "Consider",
         "verdict.verify_first": "Verify first",
         "verdict.pass": "Pass",
+        "verdict.needs_data": "Needs data",
+        "emirate.dubai": "Dubai",
+        "emirate.abu_dhabi": "Abu Dhabi",
+        "emirate.sharjah": "Sharjah",
+        "emirate.ras_al_khaimah": "Ras Al Khaimah",
+        "emirate.ajman": "Ajman",
+        "emirate.umm_al_quwain": "Umm Al Quwain",
+        "emirate.fujairah": "Fujairah",
+        "type.apartment": "apartment",
+        "type.villa": "villa",
+        "type.townhouse": "townhouse",
+        "type.penthouse": "penthouse",
+        "type.duplex": "duplex",
+        "type.plot": "plot",
+        "type.office": "office",
         "criterion.value": "Value",
         "criterion.yield": "Yield",
         "criterion.fit": "Fit",
@@ -265,7 +296,7 @@ UI: Dict[str, Dict[str, str]] = {
     "ru": {
         "title": "Подборка объектов",
         "subtitle": "Объединённые Арабские Эмираты",
-        "prepared_for": "Подготовлено для",
+        "prepared_for": "Клиент:",
         "as_of": "На дату",
         "brief": "Запрос",
         "budget": "Бюджет",
@@ -280,7 +311,7 @@ UI: Dict[str, Dict[str, str]] = {
         "shortlisted": "В шорт-листе",
         "rejected": "Отклонено",
         "price": "Цена",
-        "psf": "за кв.фут",
+        "psf": "за кв. фут",
         "gap": "к бенчмарку сделок",
         "gross_yield": "Валовая доходность",
         "net_yield": "Чистая доходность",
@@ -293,7 +324,7 @@ UI: Dict[str, Dict[str, str]] = {
         "confidence": "Доказательность",
         "beds": "спал.",
         "studio": "Студия",
-        "sqft": "кв.футов",
+        "sqft": "кв. футов",
         "handover": "Сдача",
         "developer": "Застройщик",
         "open_page": "Открыть объявление",
@@ -306,10 +337,11 @@ UI: Dict[str, Dict[str, str]] = {
         "rejected_title": "Отклонено по условиям запроса",
         "method": "Методика",
         "method_text": (
-            "Каждый объект оценивается от 0 до 100 по выгодности (цена предложения за кв.фут к бенчмарку цен сделок), "
+            "Каждый объект оценивается от 0 до 100 по выгодности (цена предложения за кв. фут к бенчмарку цен сделок), "
             "доходности, соответствию запросу, надёжности (разрешение, верификация, актуальность, для строящихся — "
             "застройщик и регистрация проекта) и условиям оплаты. Критерий без данных считается нейтральным (50) "
-            "и снижает показатель доказательности. Цены предложения — не цены сделок. Расходы — оценка по опубликованным "
+            "и снижает показатель доказательности; объекты с недостаточной доказательностью идут после оценённых, "
+            "каким бы ни был их балл. Цены предложения — не цены сделок. Расходы — оценка по опубликованным "
             "тарифам на {rates_as_of}; до перевода средств каждую цифру следует подтвердить по официальным источникам."
         ),
         "weights": "Веса",
@@ -319,6 +351,21 @@ UI: Dict[str, Dict[str, str]] = {
         "verdict.consider": "Рассмотреть",
         "verdict.verify_first": "Сначала проверить",
         "verdict.pass": "Пропустить",
+        "verdict.needs_data": "Нужны данные",
+        "emirate.dubai": "Дубай",
+        "emirate.abu_dhabi": "Абу-Даби",
+        "emirate.sharjah": "Шарджа",
+        "emirate.ras_al_khaimah": "Рас-эль-Хайма",
+        "emirate.ajman": "Аджман",
+        "emirate.umm_al_quwain": "Умм-эль-Кайвайн",
+        "emirate.fujairah": "Фуджейра",
+        "type.apartment": "квартира",
+        "type.villa": "вилла",
+        "type.townhouse": "таунхаус",
+        "type.penthouse": "пентхаус",
+        "type.duplex": "дуплекс",
+        "type.plot": "участок",
+        "type.office": "офис",
         "criterion.value": "Выгодность",
         "criterion.yield": "Доходность",
         "criterion.fit": "Соответствие",

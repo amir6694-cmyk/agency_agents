@@ -46,6 +46,7 @@ class Listing:
     service_charge_psf: Optional[float] = None
     benchmark_psf: Optional[float] = None
     benchmark_basis: str = ""
+    benchmark_count: Optional[int] = None
     ready_benchmark_psf: Optional[float] = None
     transfer_fee_waived: bool = False
     developer_tier: Optional[int] = None

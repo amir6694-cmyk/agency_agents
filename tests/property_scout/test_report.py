@@ -2,7 +2,10 @@ import json
 
 import pytest
 
-from property_scout.messages import LANGUAGES, UI, aed, pct
+from datetime import date
+
+from property_scout.brief import EMIRATES
+from property_scout.messages import LANGUAGES, UI, aed, long_date, pct
 from property_scout.report import to_data, to_html, to_markdown
 from property_scout.scoring import assess
 
@@ -26,10 +29,30 @@ class TestFormatting:
 
     def test_pct(self):
         assert pct(0.0734) == "7.3%"
-        assert pct(-0.076, signed=True) == "-7.6%"
+        assert pct(0.05, signed=True) == "+5.0%"
+        assert pct(-0.076, signed=True) == "\u22127.6%"
+
+    def test_pct_uses_a_decimal_comma_in_russian(self):
+        assert pct(0.0734, lang="ru") == "7,3%"
+        assert pct(-0.076, signed=True, lang="ru") == "\u22127,6%"
+
+    def test_property_types_are_translated(self, result):
+        assert "квартира" in to_markdown(result, "ru")
+        assert "apartment" in to_markdown(result, "en")
 
     def test_languages_define_the_same_labels(self):
         assert set(UI["en"]) == set(UI["ru"])
+
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    def test_every_emirate_has_a_name(self, lang):
+        assert all(UI[lang][f"emirate.{emirate}"] for emirate in EMIRATES)
+
+    def test_dates_read_naturally(self):
+        assert long_date(date(2026, 11, 9)) == "9 November 2026"
+        assert long_date(date(2026, 11, 9), "ru") == "09.11.2026"
+
+    def test_report_names_the_emirate_in_the_report_language(self, result):
+        assert "Дубай" in to_html(result, "ru") and "Dubai" in to_html(result, "en")
 
 
 class TestData:

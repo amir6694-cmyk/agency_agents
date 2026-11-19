@@ -1,5 +1,6 @@
 """Benchmark from raw comparable rows: the median, not a portal's headline average."""
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date
 from statistics import median
@@ -26,8 +27,10 @@ class CompSummary:
     thin: bool
 
 
-def _months_ago(day: date, today: date) -> int:
-    return (today.year - day.year) * 12 + (today.month - day.month)
+def _months_back(today: date, months: int) -> date:
+    index = today.year * 12 + today.month - 1 - months
+    year, month = divmod(index, 12)
+    return date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
 
 
 def summarise(
@@ -44,6 +47,7 @@ def summarise(
     completion status are dropped and counted, so the caller can report them.
     """
     wanted = completion_slug(completion) if completion else None
+    earliest = _months_back(today, months)
     dropped = {"incomplete": 0, "size": 0, "date": 0, "completion": 0}
     psf: List[float] = []
     prices: List[float] = []
@@ -57,7 +61,7 @@ def summarise(
         if subject_size_sqft and abs(size - subject_size_sqft) > SIZE_BAND * subject_size_sqft:
             dropped["size"] += 1
             continue
-        if row.get("date") and _months_ago(date.fromisoformat(row["date"]), today) > months:
+        if row.get("date") and date.fromisoformat(row["date"]) < earliest:
             dropped["date"] += 1
             continue
         if wanted and row.get("completion") and completion_slug(row["completion"]) != wanted:

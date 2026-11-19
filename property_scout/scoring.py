@@ -10,6 +10,7 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from .brief import CRITERIA, Brief
+from .comps import MIN_COMPS
 from .costs import GOLDEN_VISA_MIN_AED, CostBreakdown, acquisition_costs, ltv_cap
 from .dedupe import dedupe
 from .listing import Listing
@@ -46,8 +47,9 @@ RECENT_WITHIN_DAYS = 14
 SIZE_SHORTFALL_FLOOR = 0.80
 LATE_HANDOVER_PENALTY_PER_MONTH = 10.0
 SHORTLIST_SCORE = 65.0
-SHORTLIST_CONFIDENCE = 0.60
 CONSIDER_SCORE = 50.0
+# Below this share of the weighted criteria, a score says more about what is missing than about the offer.
+RATED_CONFIDENCE = 0.60
 PERMIT_EMIRATES = ("dubai", "abu_dhabi")
 DEVELOPER_TIER_POINTS = {1: 1.0, 2: 0.6, 3: 0.2}
 EVIDENCE_POINTS = {"page": 1.0, "card": 0.5, "lead": 0.0}
@@ -89,6 +91,10 @@ class Assessment:
     @property
     def has_critical_flag(self) -> bool:
         return any(flag.severity == "critical" for flag in self.flags)
+
+    @property
+    def rated(self) -> bool:
+        return self.confidence >= RATED_CONFIDENCE
 
 
 @dataclass
@@ -304,6 +310,8 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("info", "costs_exceed_budget", outlay=costs.total_outlay)
     if listing.benchmark_psf is None and listing.size_sqft is not None:
         add("info", "no_benchmark")
+    if listing.benchmark_psf is not None and listing.benchmark_count is not None and listing.benchmark_count < MIN_COMPS:
+        add("warning", "thin_benchmark", count=listing.benchmark_count)
     if offplan and listing.annual_rent_aed is not None:
         add("info", "projected_rent")
     if listing.evidence == "card":
@@ -316,7 +324,9 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
 def _verdict(score: float, confidence: float, critical: bool) -> str:
     if critical:
         return "verify_first"
-    if score >= SHORTLIST_SCORE and confidence >= SHORTLIST_CONFIDENCE:
+    if confidence < RATED_CONFIDENCE:
+        return "needs_data"
+    if score >= SHORTLIST_SCORE:
         return "shortlist"
     if score >= CONSIDER_SCORE:
         return "consider"
@@ -383,5 +393,5 @@ def assess(brief: Brief, listings: List[Listing], today: date) -> Result:
         assessment = assess_one(brief, listing, costs, weights, today)
         assessment.duplicate_urls = folded.get(listing.url, [])
         ranked.append(assessment)
-    ranked.sort(key=lambda a: (a.has_critical_flag, -a.score, -a.confidence, a.listing.price_aed))
+    ranked.sort(key=lambda a: (a.has_critical_flag, not a.rated, -a.score, -a.confidence, a.listing.price_aed))
     return Result(brief=brief, as_of=today, ranked=ranked, rejected=rejected, weights=weights, received=len(listings))

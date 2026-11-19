@@ -13,7 +13,7 @@ from property_scout.scoring import (
     IMPLAUSIBLE_GAP,
     NET_YIELD_RANGE,
     PROFILES,
-    SHORTLIST_CONFIDENCE,
+    RATED_CONFIDENCE,
     SHORTLIST_SCORE,
     VALUE_BEST_GAP,
     VALUE_WORST_GAP,
@@ -100,7 +100,7 @@ class TestDefinitionMatchesEngine:
             assert f"{low * 100:g}%" in definition and f"{high * 100:g}%" in definition
 
     def test_states_the_shortlist_bar(self, definition):
-        assert f"{SHORTLIST_SCORE:.0f}" in definition and f"{SHORTLIST_CONFIDENCE:.0%}" in definition
+        assert f"{SHORTLIST_SCORE:.0f}" in definition and f"{RATED_CONFIDENCE:.0%}" in definition
 
     @pytest.mark.parametrize("purpose", sorted(PROFILES))
     def test_weight_table_row_matches_the_profile(self, definition, purpose):

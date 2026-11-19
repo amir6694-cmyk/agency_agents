@@ -1,6 +1,7 @@
 import pytest
 
 from property_scout.brief import CRITERIA
+from property_scout.comps import MIN_COMPS
 from property_scout.costs import GOLDEN_VISA_MIN_AED
 from property_scout.messages import TEXT, render
 from property_scout.scoring import (
@@ -11,7 +12,7 @@ from property_scout.scoring import (
     NEUTRAL,
     OFFPLAN_PREMIUM_LIMIT,
     PROFILES,
-    SHORTLIST_CONFIDENCE,
+    RATED_CONFIDENCE,
     SHORTLIST_SCORE,
     STALE_AFTER_DAYS,
     VALUE_BEST_GAP,
@@ -278,7 +279,30 @@ class TestScoreAndVerdict:
         assessment = only(assess(brief, [make_listing()], today))
         assert assessment.score == NEUTRAL
         assert assessment.confidence == 0
-        assert assessment.verdict == "consider"
+        assert assessment.verdict == "needs_data"
+
+    def test_a_documented_average_offer_ranks_above_an_undocumented_one(self, make_brief, make_listing, today):
+        documented = make_listing(
+            url="https://a.example/known",
+            building="Known Tower",
+            price_aed=BENCHMARK * 1.10 * 750,
+            benchmark_psf=BENCHMARK,
+            annual_rent_aed=110_000,
+        )
+        blank = make_listing(url="https://a.example/blank", building="Blank Tower")
+        result = assess(make_brief(purpose="yield", budget_max=3_000_000), [blank, documented], today)
+        known, unknown = result.ranked
+        assert known.listing.url == "https://a.example/known"
+        assert unknown.score > known.score
+        assert known.verdict in ("consider", "pass") and unknown.verdict == "needs_data"
+
+    def test_rated_boundary(self, make_brief, make_listing, today):
+        def run(trust_weight):
+            brief = make_brief(weights={"value": 1 - trust_weight, "yield": 0, "fit": 0, "trust": trust_weight, "terms": 0})
+            return only(assess(brief, [make_listing()], today))
+
+        assert run(RATED_CONFIDENCE).rated and run(RATED_CONFIDENCE).verdict != "needs_data"
+        assert not run(RATED_CONFIDENCE - 0.05).rated
 
     def test_thin_evidence_cannot_outrank_full_evidence(self, make_brief, make_listing, today):
         thin = make_listing(url="https://a.example/thin", building="Thin Tower", price_aed=BENCHMARK * 0.86 * 750, benchmark_psf=BENCHMARK)
@@ -307,7 +331,7 @@ class TestScoreAndVerdict:
             observed_on=today.isoformat(),
         )
         assessment = only(assess(make_brief(), [strong], today))
-        assert assessment.score >= SHORTLIST_SCORE and assessment.confidence >= SHORTLIST_CONFIDENCE
+        assert assessment.score >= SHORTLIST_SCORE and assessment.confidence >= RATED_CONFIDENCE
         assert assessment.verdict == "shortlist"
 
     def test_overpriced_low_yield_unit_is_a_pass(self, make_brief, make_listing, today):
@@ -360,6 +384,15 @@ class TestOtherFlags:
         assert "offplan_premium" not in codes(usual, "offplan", "primary")
         assert "offplan_premium" not in codes(dear, "ready", "resale")
 
+    def test_benchmark_on_few_sales_is_flagged(self, make_brief, make_listing, today):
+        def codes(count):
+            listing = make_listing(benchmark_psf=BENCHMARK, benchmark_count=count)
+            return flag_codes(only(assess(make_brief(), [listing], today)))
+
+        assert "thin_benchmark" in codes(MIN_COMPS - 1)
+        assert "thin_benchmark" not in codes(MIN_COMPS)
+        assert "thin_benchmark" not in codes(None)
+
     def test_emirate_without_a_cost_table_is_flagged(self, make_brief, make_listing, today):
         assessment = only(assess(make_brief(emirates=[]), [make_listing(emirate=None)], today))
         assert "cost_rates_unknown" in flag_codes(assessment)
@@ -377,7 +410,7 @@ class TestMessages:
     def test_every_note_renders_in_every_language(self, make_brief, make_listing, today):
         brief = make_brief(areas=["Dubai Marina"], must_have=["sea view"], size_min_sqft=800, handover_by="2027-Q1", purpose="end_use", budget_max=1_850_000)
         listings = [
-            make_listing(url="https://a.example/1", benchmark_psf=BENCHMARK, annual_rent_aed=120_000, service_charge_psf=16, verified=True, permit_number="7", observed_on="2026-11-10", listed_days_ago=200, tags=["tenanted"]),
+            make_listing(url="https://a.example/1", benchmark_psf=BENCHMARK, benchmark_count=2, annual_rent_aed=120_000, service_charge_psf=16, verified=True, permit_number="7", observed_on="2026-11-10", listed_days_ago=200, tags=["tenanted"]),
             make_listing(url="https://a.example/2", building="B", completion="offplan", sale_type="primary", handover="2028-Q4", payment_plan={"on_booking": 20, "during_construction": 40, "on_handover": 40}, developer_tier=3, registration_verified=False, annual_rent_aed=100_000),
             make_listing(url="https://a.example/3", building="C", price_aed=900_000, benchmark_psf=BENCHMARK, completion=None, emirate=None),
             make_listing(url="https://a.example/4", building="D", price_aed=9_000_000, bedrooms=6, emirate="ajman", property_type="villa"),

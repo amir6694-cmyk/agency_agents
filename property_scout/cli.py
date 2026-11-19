@@ -78,6 +78,7 @@ LISTING_TEMPLATE = {
     "service_charge_psf": None,
     "benchmark_psf": None,
     "benchmark_basis": "",
+    "benchmark_count": None,
     "ready_benchmark_psf": None,
     "transfer_fee_waived": False,
     "developer_tier": None,
