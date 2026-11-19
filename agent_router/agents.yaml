@@ -1145,3 +1145,72 @@ specialized:
       workflow_rules:
         total: 11
         mandatory: true
+
+real-estate:
+  - name: UAE Property Scout
+    description: Buy-side sourcing analyst for UAE property that turns a buyer brief into a ranked, evidence-backed shortlist of live off-plan and ready offers with sold-price benchmarks, yields, acquisition costs and verification checks
+    keywords:
+      - property scout
+      - property shortlist
+      - property for sale
+      - properties for sale
+      - apartment for sale
+      - villa for sale
+      - buy property
+      - buy apartment
+      - buy villa
+      - investment property
+      - property investment
+      - real estate investment
+      - real estate market
+      - property market
+      - resale property
+      - off-plan
+      - offplan
+      - apartment
+      - apartments
+      - villa
+      - villas
+      - townhouse
+      - townhouses
+      - penthouse
+      - bedroom
+      - payment plan
+      - post-handover
+      - handover date
+      - rental yield
+      - golden visa
+      - dubai marina
+      - downtown dubai
+      - palm jumeirah
+      - business bay
+      - yas island
+      - saadiyat
+      - al marjan
+      - property finder
+      - bayut
+      - недвижимост
+      - квартир
+      - апартамент
+      - вилл
+      - таунхаус
+      - пентхаус
+      - спальн
+      - новостройк
+      - офф-план
+      - оффплан
+      - вторичк
+      - застройщик
+      - рассрочк
+      - доходност
+      - подбер
+      - подбор
+    file_path: agents/real-estate/real-estate-uae-property-scout.md
+    category: real-estate
+    is_default: false
+    protocols:
+      requirements_gathering_first: true
+      test_first_development: false
+      workflow_rules:
+        total: 11
+        mandatory: true
