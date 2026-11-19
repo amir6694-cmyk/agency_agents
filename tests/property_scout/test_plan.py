@@ -1,7 +1,5 @@
 from urllib.parse import parse_qs, urlsplit
 
-import pytest
-
 from property_scout.brief import EMIRATES
 from property_scout.plan import EMIRATE_SLUG, NEW_PROJECT_TYPE_ID, PF, TYPE_SLUG, search_plan
 

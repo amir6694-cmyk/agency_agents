@@ -1,0 +1,144 @@
+#!/bin/bash
+
+#
+# Bash Validation Script for the property_scout engine
+#
+# Following Rule 4: Bash Test Validation for Math/Logic
+# Recomputes costs, payment-plan value, yields and scores with awk from the
+# published fee schedules and the rubric, then compares with what the engine prints.
+#
+# Run from the project root: bash tests/validation/test_property_scout_math.sh
+#
+
+set -e
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+PASS_COUNT=0
+FAIL_COUNT=0
+
+check() {
+    local name="$1" expected="$2" actual="$3" tolerance="${4:-0.5}"
+    if awk -v e="$expected" -v a="$actual" -v t="$tolerance" 'BEGIN { d = e - a; if (d < 0) d = -d; exit !(d <= t) }'; then
+        echo "PASS  $name: $actual"
+        PASS_COUNT=$((PASS_COUNT + 1))
+    else
+        echo "FAIL  $name: expected $expected, engine says $actual"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+}
+
+costs_field() {
+    local field="$1"; shift
+    python3 -m property_scout costs --json "$@" | python3 -c "import json,sys; print(json.load(sys.stdin)['$field'])"
+}
+
+echo "Acquisition costs"
+
+# Dubai: 4% + 520 fixed + trustee 4,000 plus 5% VAT + agency 2% plus 5% VAT
+check "Dubai cash resale, AED 2,000,000" \
+    "$(awk 'BEGIN { p = 2000000; print p * 0.04 + 520 + 4000 * 1.05 + p * 0.02 * 1.05 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate dubai --sale-type resale)"
+
+# Below AED 500,000 the trustee fee is 2,000 plus VAT
+check "Dubai cash resale, AED 450,000" \
+    "$(awk 'BEGIN { p = 450000; print p * 0.04 + 520 + 2000 * 1.05 + p * 0.02 * 1.05 }')" \
+    "$(costs_field total_costs_aed --price 450000 --emirate dubai --sale-type resale)"
+
+# Mortgage registration: 0.25% of the loan + 270; fees are not financed
+check "Dubai mortgaged resale, costs" \
+    "$(awk 'BEGIN { p = 2000000; print p * 0.04 + 520 + 4200 + p * 0.021 + p * 0.75 * 0.0025 + 270 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate dubai --sale-type resale --financing mortgage --ltv 0.75)"
+check "Dubai mortgaged resale, own funds" \
+    "$(awk 'BEGIN { p = 2000000; print p * 0.25 + p * 0.04 + 520 + 4200 + p * 0.021 + p * 0.75 * 0.0025 + 270 }')" \
+    "$(costs_field upfront_cash_aed --price 2000000 --emirate dubai --sale-type resale --financing mortgage --ltv 0.75)"
+
+# Bought from the developer: 4% + 20, no trustee, no agency fee
+check "Dubai off-plan from developer" \
+    "$(awk 'BEGIN { print 2000000 * 0.04 + 20 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate dubai --completion offplan --sale-type primary)"
+
+# Abu Dhabi: 2% + 875; commission 2% capped at 500,000, plus VAT
+check "Abu Dhabi resale, AED 30,000,000 (commission cap)" \
+    "$(awk 'BEGIN { p = 30000000; c = p * 0.02; if (c > 500000) c = 500000; print p * 0.02 + 875 + c * 1.05 }')" \
+    "$(costs_field total_costs_aed --price 30000000 --emirate abu_dhabi --sale-type resale)"
+
+check "Ras Al Khaimah resale" \
+    "$(awk 'BEGIN { print 2000000 * 0.02 + 400 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate ras_al_khaimah --sale-type resale)"
+check "Sharjah, other nationalities" \
+    "$(awk 'BEGIN { print 2000000 * 0.04 + 500 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate sharjah --sale-type resale)"
+check "Sharjah, GCC national" \
+    "$(awk 'BEGIN { print 2000000 * 0.02 + 500 }')" \
+    "$(costs_field total_costs_aed --price 2000000 --emirate sharjah --sale-type resale --gcc-national)"
+check "Ajman minimum fee on AED 50,000" \
+    "$(awk 'BEGIN { f = 50000 * 0.03; if (f < 3000) f = 3000; print f + 350 }')" \
+    "$(costs_field total_costs_aed --price 50000 --emirate ajman --sale-type resale)"
+
+echo ""
+echo "Payment plans, yields and scores"
+
+cat > "$WORK/brief.json" <<'JSON'
+{"budget_max": 5000000, "purpose": "yield", "emirates": ["dubai"], "discount_rate": 0.06}
+JSON
+cat > "$WORK/listings.json" <<'JSON'
+[
+  {"url": "https://example.com/a", "evidence": "page", "price_aed": 2000000, "emirate": "dubai",
+   "community": "Test", "building": "Tower A", "bedrooms": 2, "size_sqft": 1000, "completion": "ready",
+   "sale_type": "resale", "annual_rent_aed": 130000, "service_charge_psf": 18, "benchmark_psf": 2000,
+   "payment_plan": {"on_booking": 60, "post_handover": 40}, "post_handover_months": 40},
+  {"url": "https://example.com/b", "evidence": "page", "price_aed": 1500000, "emirate": "dubai",
+   "community": "Test", "building": "Tower B", "bedrooms": 1, "size_sqft": 750, "completion": "offplan",
+   "sale_type": "primary", "handover": "2028-11",
+   "payment_plan": {"on_booking": 20, "during_construction": 40, "on_handover": 40}}
+]
+JSON
+python3 -m property_scout score --brief "$WORK/brief.json" --listings "$WORK/listings.json" --today 2026-11-19 > "$WORK/out.json"
+
+field() {
+    python3 -c "
+import json, sys
+rows = {r['url']: r for r in json.load(open('$WORK/out.json'))['ranked']}
+row = rows['https://example.com/$1']
+value = row
+for key in '$2'.split('.'):
+    value = next(c for c in value if c['name'] == key[1:]) if key.startswith('@') else value[key]
+print(value)
+"
+}
+
+# 60% today, 40% in 40 equal monthly instalments, discounted at 6% a year compounded monthly
+check "present value of a 60/40 post-handover plan" \
+    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.6; for (m = 1; m <= 40; m++) pv += 0.01 / (1 + r) ^ m; print pv }')" \
+    "$(field a plan_present_value_ratio)" 0.000001
+
+# 20% today, 40% in 24 equal monthly instalments, 40% at handover in 24 months
+check "present value of a 20/40/40 construction plan" \
+    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.2; for (m = 1; m <= 24; m++) pv += (0.4 / 24) / (1 + r) ^ m; pv += 0.4 / (1 + r) ^ 24; print pv }')" \
+    "$(field b plan_present_value_ratio)" 0.000001
+
+check "gross yield" "$(awk 'BEGIN { print 130000 / 2000000 }')" "$(field a gross_yield)" 0.000001
+
+# Net: rent less service charge and 13% of rent, over price plus acquisition costs
+check "net yield" \
+    "$(awk 'BEGIN { p = 2000000; costs = p * 0.04 + 520 + 4200 + p * 0.021; print (130000 - 18 * 1000 - 0.13 * 130000) / (p + costs) }')" \
+    "$(field a net_yield)" 0.000001
+
+# Value: 20% above the benchmark scores 0, 10% below scores 100; level with it is two thirds of the way
+check "value score at the benchmark" "$(awk 'BEGIN { print 100 * (0 - 0.20) / (-0.10 - 0.20) }')" "$(field a criteria.@value.score)" 0.06
+
+# Yield: net yield from 2% (0) to 7.5% (100)
+check "yield score" \
+    "$(awk 'BEGIN { p = 2000000; costs = p * 0.04 + 520 + 4200 + p * 0.021; n = (130000 - 18000 - 16900) / (p + costs); print 100 * (n - 0.02) / (0.075 - 0.02) }')" \
+    "$(field a criteria.@yield.score)" 0.06
+
+# Terms: a deferral worth 10% of the price scores 100
+check "terms score" \
+    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.6; for (m = 1; m <= 40; m++) pv += 0.01 / (1 + r) ^ m; print 100 * (1 - pv) / 0.10 }')" \
+    "$(field a criteria.@terms.score)" 0.06
+
+echo ""
+echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"
+[ "$FAIL_COUNT" -eq 0 ]
