@@ -118,6 +118,13 @@ class TestOtherEmirates:
         price = schedule.transfer_minimum / schedule.transfer_rate / 2
         assert amounts(acquisition_costs(price, "ajman", "ready", "resale"))["cost.transfer_fee"] == schedule.transfer_minimum
 
+    def test_ajman_gcc_nationals_have_their_own_lower_minimum(self):
+        schedule = SCHEDULES["ajman"]
+        price = schedule.transfer_minimum_gcc / schedule.transfer_rate_gcc / 2
+        fee = amounts(acquisition_costs(price, "ajman", "ready", "resale", gcc_national=True))["cost.transfer_fee"]
+        assert fee == schedule.transfer_minimum_gcc
+        assert 0 < schedule.transfer_minimum_gcc < schedule.transfer_minimum
+
     @pytest.mark.parametrize("emirate", sorted(SCHEDULES))
     def test_part_published_schedules_are_marked(self, emirate):
         assert acquisition_costs(PRICE, emirate, "ready", "resale").official is SCHEDULES[emirate].official

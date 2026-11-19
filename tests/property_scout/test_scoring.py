@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from property_scout.brief import CRITERIA
@@ -8,6 +10,8 @@ from property_scout.scoring import (
     CONSIDER_SCORE,
     DEVELOPER_TIER_POINTS,
     EVIDENCE_POINTS,
+    FRESH_WITHIN_DAYS,
+    RECENT_WITHIN_DAYS,
     IMPLAUSIBLE_GAP,
     NEUTRAL,
     OFFPLAN_PREMIUM_LIMIT,
@@ -68,6 +72,11 @@ class TestHardFilters:
         strict = assess(make_brief(budget_max=1_850_000, budget_includes_costs=True), [listing], today)
         assert len(loose.ranked) == 1
         assert self.reasons(strict) == {"reject.over_budget_costs"}
+
+    def test_a_price_exactly_on_a_budget_limit_is_inside_it(self, make_brief, make_listing, today):
+        listing = make_listing(price_aed=1_800_000)
+        assert len(assess(make_brief(budget_max=1_800_000), [listing], today).ranked) == 1
+        assert len(assess(make_brief(budget_min=1_800_000), [listing], today).ranked) == 1
 
     def test_under_minimum(self, make_brief, make_listing, today):
         result = assess(make_brief(budget_min=2_000_000), [make_listing()], today)
@@ -228,6 +237,12 @@ class TestTrust:
         assert criterion(assessment, "trust").score == 100
         assert "no_permit" not in flag_codes(assessment)
 
+    @pytest.mark.parametrize("days, points", [(0, 1.0), (FRESH_WITHIN_DAYS, 1.0), (FRESH_WITHIN_DAYS + 1, 0.5), (RECENT_WITHIN_DAYS, 0.5), (RECENT_WITHIN_DAYS + 1, 0.0)])
+    def test_trust_fades_as_the_sighting_ages(self, make_brief, make_listing, today, days, points):
+        seen = (today - timedelta(days=days)).isoformat()
+        score = criterion(only(assess(make_brief(), [make_listing(observed_on=seen)], today)), "trust").score
+        assert score == pytest.approx(100 * (EVIDENCE_POINTS["page"] + points) / 2)
+
     def test_old_sightings_and_unverified_adverts_lose_trust(self, make_brief, make_listing, today):
         listing = make_listing(evidence="lead", verified=False, observed_on="2026-09-01")
         assert criterion(only(assess(make_brief(), [listing], today)), "trust").score == 0
@@ -253,6 +268,10 @@ class TestTrust:
 class TestTerms:
     def test_not_applicable_to_a_plain_resale(self, make_brief, make_listing, today):
         assert criterion(only(assess(make_brief(), [make_listing()], today)), "terms").applicable is False
+
+    def test_not_applicable_to_an_off_plan_resale_without_a_plan(self, make_brief, make_listing, today):
+        listing = make_listing(completion="offplan", sale_type="resale")
+        assert criterion(only(assess(make_brief(), [listing], today)), "terms").applicable is False
 
     def test_unknown_for_primary_off_plan_without_a_plan(self, make_brief, make_listing, today):
         listing = make_listing(completion="offplan", sale_type="primary")
@@ -333,6 +352,18 @@ class TestScoreAndVerdict:
         assessment = only(assess(make_brief(), [strong], today))
         assert assessment.score >= SHORTLIST_SCORE and assessment.confidence >= RATED_CONFIDENCE
         assert assessment.verdict == "shortlist"
+
+    @pytest.mark.parametrize(
+        "score, verdict",
+        [(SHORTLIST_SCORE, "shortlist"), (SHORTLIST_SCORE - 0.5, "consider"), (CONSIDER_SCORE, "consider"), (CONSIDER_SCORE - 1, "pass")],
+    )
+    def test_verdict_boundaries(self, make_brief, make_listing, today, score, verdict):
+        gap = VALUE_WORST_GAP + (VALUE_BEST_GAP - VALUE_WORST_GAP) * score / 100
+        listing = make_listing(price_aed=BENCHMARK * (1 + gap) * 750, benchmark_psf=BENCHMARK)
+        brief = make_brief(budget_max=5_000_000, weights={"value": 1, "yield": 0, "fit": 0, "trust": 0, "terms": 0})
+        assessment = only(assess(brief, [listing], today))
+        assert assessment.score == pytest.approx(score, abs=0.05)
+        assert assessment.verdict == verdict
 
     def test_overpriced_low_yield_unit_is_a_pass(self, make_brief, make_listing, today):
         weak = make_listing(price_aed=2_400_000, benchmark_psf=BENCHMARK, annual_rent_aed=70_000, service_charge_psf=30, verified=False)

@@ -306,7 +306,7 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
             add("warning", "ltv_over_cap", ltv=brief.loan_to_value, cap=cap)
     if brief.purpose == "golden_visa" and (offplan or brief.financing == "mortgage"):
         add("info", "golden_visa_conditions")
-    if not brief.budget_includes_costs and costs.total_outlay > brief.budget_max:
+    if costs.total_outlay > brief.budget_max:
         add("info", "costs_exceed_budget", outlay=costs.total_outlay)
     if listing.benchmark_psf is None and listing.size_sqft is not None:
         add("info", "no_benchmark")

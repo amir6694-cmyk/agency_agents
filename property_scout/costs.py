@@ -30,6 +30,7 @@ class Schedule:
     official: bool
     transfer_rate_gcc: Optional[float] = None
     transfer_minimum: float = 0.0
+    transfer_minimum_gcc: float = 0.0
     trustee_tiers: Tuple[Tuple[float, float], ...] = ()
     trustee_offplan_resale: float = 0.0
     agency_rate: Optional[float] = None
@@ -78,6 +79,7 @@ SCHEDULES: Dict[str, Schedule] = {
         transfer_rate=0.03,
         transfer_rate_gcc=0.02,
         transfer_minimum=3_000,
+        transfer_minimum_gcc=2_500,
         fixed_ready=350,
         fixed_offplan=350,
         official=False,
@@ -150,7 +152,7 @@ def acquisition_costs(
     minimum = schedule.transfer_minimum
     if gcc_national and schedule.transfer_rate_gcc is not None:
         rate = schedule.transfer_rate_gcc
-        minimum = 0.0
+        minimum = schedule.transfer_minimum_gcc
     if transfer_fee_waived:
         items = [CostItem(Note("cost.transfer_fee_waived", {"rate": rate}), 0.0)]
     else:

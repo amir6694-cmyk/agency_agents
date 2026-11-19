@@ -57,6 +57,14 @@ class TestDedupe:
         ]
         assert len(dedupe(listings)[0]) == 3
 
+    def test_unknown_bedrooms_never_merge(self, make_listing):
+        listings = [make_listing(bedrooms=None), make_listing(url="https://a.example/2", bedrooms=None)]
+        assert len(dedupe(listings)[0]) == 2
+
+    def test_same_building_name_in_another_community_is_another_unit(self, make_listing):
+        listings = [make_listing(), make_listing(url="https://a.example/2", community="Business Bay")]
+        assert len(dedupe(listings)[0]) == 2
+
     def test_missing_building_or_size_never_merges(self, make_listing):
         listings = [make_listing(building=None), make_listing(url="https://a.example/2", building=None)]
         assert len(dedupe(listings)[0]) == 2

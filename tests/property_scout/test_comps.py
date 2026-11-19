@@ -28,6 +28,17 @@ class TestSummarise:
         assert summary.used == 1
         assert summary.dropped["size"] == 1
 
+    def test_size_band_edges(self, today):
+        inside = row(1_500_000, 750 * (1 + SIZE_BAND))
+        near = row(1_500_000, 750 * (1 - SIZE_BAND * 0.75))
+        outside = row(1_500_000, 750 * (1 + SIZE_BAND) + 1)
+        summary = summarise([inside, near, outside], today, subject_size_sqft=750)
+        assert summary.used == 2 and summary.dropped["size"] == 1
+
+    def test_negative_figures_are_incomplete_rows(self, today):
+        summary = summarise([row(-1_500_000, 750), row(1_500_000, -750)], today)
+        assert summary.used == 0 and summary.dropped["incomplete"] == 2
+
     def test_drops_rows_older_than_the_window(self, today):
         rows = [row(1_500_000, 750, "2026-10-30"), row(1_900_000, 750, "2026-07-01")]
         summary = summarise(rows, today)

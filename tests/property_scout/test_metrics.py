@@ -62,6 +62,14 @@ class TestPaymentPlanValue:
         assert value.months_to_handover == 12
         assert value.present_value_ratio == pytest.approx(1 / 1.08)
 
+    def test_construction_instalments_fall_at_the_end_of_each_month(self, make_listing):
+        listing = make_listing(completion="offplan", handover="2027-01", payment_plan={"during_construction": 100})
+        rate = 0.12
+        monthly = (1 + rate) ** (1 / 12) - 1
+        value = plan_value(listing, date(2026, 11, 19), rate)
+        assert value.months_to_handover == 2
+        assert value.present_value_ratio == pytest.approx(0.5 / (1 + monthly) + 0.5 / (1 + monthly) ** 2)
+
     def test_zero_rate_means_no_benefit(self, make_listing, today):
         listing = make_listing(completion="offplan", handover="2029-Q4", payment_plan={"on_booking": 20, "on_handover": 80})
         assert plan_value(listing, today, 0.0).deferral_benefit == pytest.approx(0.0)

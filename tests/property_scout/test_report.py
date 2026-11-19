@@ -57,8 +57,10 @@ class TestFormatting:
 
 class TestData:
     def test_counts_reconcile(self, result):
+        shortlisted = [a for a in result.ranked if a.verdict == "shortlist"]
+        assert 0 < len(shortlisted) < len(result.ranked)
         counts = to_data(result)["counts"]
-        assert counts == {"received": 4, "unique": 3, "ranked": 2, "shortlisted": counts["shortlisted"], "rejected": 1}
+        assert counts == {"received": 4, "unique": 3, "ranked": 2, "shortlisted": len(shortlisted), "rejected": 1}
 
     def test_is_json_serialisable_and_ranked_in_order(self, result):
         data = json.loads(json.dumps(to_data(result)))
