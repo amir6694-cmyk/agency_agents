@@ -108,8 +108,9 @@ class TestHtml:
         assert "A &amp; B &lt;Family&gt;" in html
         assert "https://b.example/dup?x=1&amp;y=2" in html
 
-    def test_has_no_scripts(self, result):
-        assert "<script" not in to_html(result)
+    def test_is_self_contained(self, result):
+        html = to_html(result)
+        assert "<script" not in html and "<link" not in html and "@import" not in html
 
     def test_empty_ranking_says_so(self, make_brief, today):
         assert UI["ru"]["none_ranked"] in to_html(assess(make_brief(), [], today), "ru")

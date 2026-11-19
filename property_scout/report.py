@@ -7,8 +7,8 @@ from .costs import RATES_AS_OF
 from .messages import UI, aed, long_date, pct, render
 from .scoring import Assessment, Result
 
-PALETTE = {"navy": "#071522", "panel": "#0E2233", "line": "#1E3A52", "gold": "#C9A45D", "ivory": "#F2EBDD", "mute": "#8FA0AD"}
-SEVERITY_COLOUR = {"critical": "#D9654F", "warning": "#C9A45D", "info": "#8FA0AD"}
+PALETTE = {"page": "#FFFFFF", "text": "#111111", "mute": "#6B6B6B", "line": "#E2E2E2", "bar": "#333333"}
+SEVERITY_COLOUR = {"critical": "#B42318", "warning": "#111111", "info": "#6B6B6B"}
 
 
 def _unit_line(a: Assessment, t: Dict[str, str]) -> str:
@@ -155,40 +155,39 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
 
 _CSS = """
 *{box-sizing:border-box}
-body{margin:0;background:%(navy)s;color:%(ivory)s;font-family:'Manrope','Helvetica Neue',Arial,sans-serif;font-size:15px;line-height:1.55}
-main{max-width:980px;margin:0 auto;padding:56px 24px 72px}
-h1,h2,h3{font-family:'Cormorant Garamond','Fraunces',Georgia,serif;font-weight:500;letter-spacing:.02em;margin:0}
-h1{font-size:44px;color:%(gold)s}
-h2{font-size:26px;margin-top:56px;padding-bottom:10px;border-bottom:1px solid %(line)s}
-h3{font-size:25px}
-a{color:%(gold)s;text-decoration:none;border-bottom:1px solid transparent}a:hover{border-bottom-color:%(gold)s}
-.eyebrow{font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:%(mute)s}
-.rule{width:72px;height:1px;background:%(gold)s;margin:22px 0}
+body{margin:0;background:%(page)s;color:%(text)s;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:15px;line-height:1.55}
+main{max-width:980px;margin:0 auto;padding:48px 24px 72px}
+h1,h2,h3{font-weight:600;margin:0}
+h1{font-size:34px}
+h2{font-size:22px;margin-top:48px;padding-bottom:10px;border-bottom:1px solid %(line)s}
+h3{font-size:20px}
+a{color:%(text)s;text-decoration:underline}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:%(mute)s}
+.rule{height:1px;background:%(line)s;margin:18px 0}
 .brief{color:%(mute)s;max-width:760px}
-.stats{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
-.stat{flex:1 1 150px;border:1px solid %(line)s;padding:14px 16px}
-.stat b{display:block;font-family:'Cormorant Garamond','Fraunces',Georgia,serif;font-size:30px;font-weight:500;color:%(gold)s}
-.card{background:%(panel)s;border:1px solid %(line)s;margin-top:22px;padding:26px 28px}
+.stats{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+.stat{flex:1 1 150px;border:1px solid %(line)s;padding:14px 16px;color:%(mute)s}
+.stat b{display:block;font-size:26px;font-weight:600;color:%(text)s}
+.card{border:1px solid %(line)s;margin-top:20px;padding:24px 26px}
 .head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}
-.rank{font-family:'Cormorant Garamond','Fraunces',Georgia,serif;font-size:20px;color:%(gold)s;margin-right:10px}
+.rank{color:%(mute)s;margin-right:10px;font-weight:400}
 .unit{color:%(mute)s;margin-top:4px}
 .score{text-align:right;white-space:nowrap}
-.score b{font-family:'Cormorant Garamond','Fraunces',Georgia,serif;font-size:40px;font-weight:500;color:%(gold)s;line-height:1}
-.badge{display:inline-block;margin-top:6px;padding:3px 10px;border:1px solid %(gold)s;font-size:11px;letter-spacing:.16em;text-transform:uppercase}
-.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:22px 0 4px}
-.figures span{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:%(mute)s}
-.figures b{font-size:17px;font-weight:500}
-h4{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:%(mute)s;font-weight:500;margin:22px 0 8px}
+.score b{font-size:34px;font-weight:600;line-height:1}
+.badge{display:inline-block;margin-top:6px;padding:3px 10px;border:1px solid %(text)s;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:20px 0 4px}
+.figures span{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:%(mute)s}
+.figures b{font-size:17px;font-weight:600}
+h4{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:%(mute)s;font-weight:600;margin:22px 0 8px}
 table{width:100%%;border-collapse:collapse}
 td{padding:6px 0;border-top:1px solid %(line)s;vertical-align:top}
 td.n{text-align:right;white-space:nowrap;padding-left:16px}
 td.k{white-space:nowrap;padding-right:16px;width:1%%}
-.bar{height:3px;background:%(line)s;margin-top:5px}.bar i{display:block;height:3px;background:%(gold)s}
+.bar{height:3px;background:%(line)s;margin-top:5px}.bar i{display:block;height:3px;background:%(bar)s}
 ul{margin:0;padding:0;list-style:none}li{padding:6px 0;border-top:1px solid %(line)s}
-.sev{font-size:10px;letter-spacing:.16em;text-transform:uppercase;margin-right:8px}
+.sev{font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin-right:8px}
 .small{color:%(mute)s;font-size:13px}
-footer{margin-top:56px;color:%(mute)s;font-size:13px;max-width:820px}
-@media print{body{background:#fff;color:#111}.card{background:#fff}h1,.stat b,.score b,.rank,a{color:#7a5c1e}}
+footer{margin-top:48px;color:%(mute)s;font-size:13px;max-width:820px}
 """ % PALETTE
 
 
@@ -268,8 +267,6 @@ def to_html(result: Result, lang: str = "en", top: Optional[int] = None) -> str:
         f"<!doctype html><html lang='{lang}'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{t['title']} — {long_date(result.as_of, lang)}</title>"
-        "<link rel='preconnect' href='https://fonts.googleapis.com'>"
-        "<link href='https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Manrope:wght@400;500;600&display=swap' rel='stylesheet'>"
         f"<style>{_CSS}</style></head><body><main>"
         f"<div class='eyebrow'>{t['subtitle']} · {t['as_of']} {long_date(result.as_of, lang)}</div>"
         f"<h1>{t['title']}</h1><div class='rule'></div>{client}"
