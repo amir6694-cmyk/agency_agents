@@ -150,6 +150,8 @@ An off-plan sale made before the project is registered is void in Dubai, and bro
 
 Record `registration_verified` as true only when you read the project in a register or its mirror in this session; false when you looked and it was absent; leave it empty when you could not look. A completion percentage whose inspection is more than three months old is stale.
 
+Mirrors file a project under its register name, which is often longer than the marketing name ("Bayz 101 by Danube", not "Bayz 101"): search for the project name together with the mirror's name instead of guessing the address. Then set the register against the advert. If the register gives a planned completion date, compare it with the advertised handover. If it gives none, compare the percentage built with the months since construction started and the months left to the advertised handover, and state all three numbers: a tower 10% built two years after it started and promised in a year and a half is not a delivery date to plan around.
+
 ### Developer tier
 
 Assign `developer_tier` from evidence, and put the evidence in the notes.
