@@ -9,7 +9,7 @@ Following Test-First Development Protocol:
 
 import pytest
 import os
-from agent_router.config import AgentConfig, AgentConfigError
+from agent_router.config import AgentConfig, AgentConfigError, PROJECT_ROOT
 
 
 class TestConfigLoading:
@@ -23,7 +23,7 @@ class TestConfigLoading:
 
     def test_config_file_exists_at_expected_path(self):
         """Config file should exist at agent_router/agents.yaml"""
-        expected_path = '/Users/gaganarora/Desktop/gagan_projects/Agency/agency_agents/agent_router/agents.yaml'
+        expected_path = os.path.join(PROJECT_ROOT, 'agent_router', 'agents.yaml')
         config = AgentConfig()
 
         assert os.path.exists(expected_path)
@@ -260,10 +260,8 @@ class TestConfigValidationRules:
 
         for agent in config.get_all_agents():
             file_path = agent['file_path']
-            # Should be absolute path
-            assert file_path.startswith('/')
-            # Should contain agency_agents directory
-            assert 'agency_agents' in file_path
+            assert os.path.isabs(file_path)
+            assert file_path.startswith(os.path.join(PROJECT_ROOT, 'agents') + os.sep)
             # Should end with .md
             assert file_path.endswith('.md')
 

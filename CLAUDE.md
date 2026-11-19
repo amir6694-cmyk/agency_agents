@@ -144,7 +144,7 @@ When writing new tests for `agent_router`, rely on the autouse fixture in `tests
 
 **Default agent**: `Senior Developer` (`is_default: true` in `agents.yaml`)
 
-**AgentConfig singleton** (`config.py`): Loads `agents.yaml` once and caches it. Validates required fields (`name`, `description`, `keywords`, `file_path`) and that `file_path` exists on disk. Call `AgentConfig.clear_cache()` to reset between tests.
+**AgentConfig singleton** (`config.py`): Loads `agents.yaml` once and caches it. Validates required fields (`name`, `description`, `keywords`, `file_path`), resolves a relative `file_path` against the project root, and checks that the file exists. Call `AgentConfig.clear_cache()` to reset between tests.
 
 **AgentPersonality** (`personality.py`): Loads and parses agent `.md` files at runtime. Extracts frontmatter (YAML), sections (identity, mission, tools, workflow), tone, examples, deliverables, and critical rules. Results are cached per agent name. Raises `PersonalityLoadError` on parse failure.
 
@@ -209,16 +209,14 @@ second-brain stats
 | `tests (narrow: hackingtool + second_brain)` | 225 tests on Python 3.9, 3.12, 3.14, plus an import smoke of all three packages and a CLI smoke of `hackingtool` and `second-brain` |
 | `checks (coverage, network isolation, hygiene)` | Coverage floor 65% on the gated packages, a guard proving no gated test performs real network or subprocess I/O, a tracked-artifact check, and a floor on the gate's own test count |
 
-**What it does NOT gate.** The 8 `agent_router` test files are excluded — they contribute 254 failures, every one terminating in `AgentConfigError` from the absolute `file_path` values described under "Absolute Path Issue" below. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
+**What it does NOT gate.** The 8 `agent_router` test files are still excluded. They used to contribute 254 failures, every one an `AgentConfigError` from absolute `file_path` values; with paths now resolved against the project root (see "Agent File Paths" below) they contribute 3. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
 
-**Widening the gate** takes more than fixing `agents.yaml`. Six failures survive a path fix and are currently masked by the config error:
+**Widening the gate** needs two product decisions, not more mechanical work. The three remaining failures are:
 
-- `test_agent_config.py:26-30` and `test_agent_router.py:245-249` hardcode the original author's Mac paths and cannot pass on any machine
-- `test_agent_config.py:257-268` asserts `'agency_agents' in file_path`, coupling the suite to the checkout directory's name
-- `test_all_37_agents.py:655-660` asserts 37 agents; `agents.yaml` registers 41
-- two `test_agent_router.py` protocol tests assert every agent sets `requirements_gathering_first` and `test_first_development` true, but 2 and 4 agents respectively set them false — a product decision, not a mechanical fix
+- `test_all_37_agents.py::test_all_37_agents_exist` asserts 37 agents; `agents.yaml` registers more
+- two `test_agent_router.py` protocol tests assert every agent sets `requirements_gathering_first` and `test_first_development` true, but several agents set them false on purpose
 
-Order: fix path resolution in `AgentConfig._validate_agent`, rewrite the three machine-coupled tests, settle the 41-vs-37 count and the protocol-flag contradiction, then replace the two gate paths with `tests/` and drop "narrow" from the job names.
+Settle the agent count and the protocol-flag contradiction, then replace the gate paths with `tests/` and drop "narrow" from the job names.
 
 **Coverage is a regression guard, not a correctness signal.** Measured 68.7% on the gated packages against a 65% floor. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
 
@@ -293,13 +291,11 @@ The body contains the agent's identity, mission, tools, workflow, and communicat
 - `agents/project-management/`: `project-management-experiment-tracker.md`, `project-management-project-shepherd.md`, `project-management-studio-operations.md`, `project-management-studio-producer.md`, `project-manager-senior.md`
 - `agents/spatial-computing/`: `macos-spatial-metal-engineer.md`, `terminal-integration-specialist.md`, `visionos-spatial-engineer.md`, `xr-cockpit-interaction-specialist.md`, `xr-immersive-developer.md`, `xr-interface-architect.md`
 
-To activate these agents, add their entries to `agent_router/agents.yaml` with correct local `file_path` values.
+To activate these agents, add their entries to `agent_router/agents.yaml` with project-relative `file_path` values.
 
-### Absolute Path Issue
+### Agent File Paths
 
-The `agents.yaml` `file_path` values are absolute paths from the original author's machine (`/Users/gaganarora/...`). The `AgentConfig._validate_agent` method calls `os.path.exists(agent['file_path'])` and raises `AgentConfigError` if the path doesn't exist.
-
-**Fix for local development**: Update `file_path` values in `agents.yaml` to point to your local absolute paths, or modify `_validate_agent` to resolve paths relative to the project root.
+`file_path` values in `agents.yaml` are relative to the project root (`agents/<category>/<file>.md`). `AgentConfig._validate_agent` anchors a relative path at `agent_router.config.PROJECT_ROOT`, replaces it with the absolute path, and raises `AgentConfigError` if the file does not exist, so the router loads from any working directory and any checkout location. An absolute path is accepted as written.
 
 ---
 
@@ -323,7 +319,7 @@ Add to `agent_router/agents.yaml`:
 - name: Agent Name
   description: One-line description
   keywords: [keyword1, keyword2]
-  file_path: /absolute/path/to/agents/category/filename.md
+  file_path: agents/category/filename.md
   category: category-name
   is_default: false
   protocols:
@@ -342,5 +338,5 @@ Add to `agent_router/agents.yaml`:
 - Do not hardcode values in tests — import from actual modules
 - Do not commit `__pycache__/`, `.env`, or `*.pyc` files
 - Do not skip the `AgentConfig.clear_cache()` in test fixtures — it causes cross-test contamination
-- Do not update `agents.yaml` `file_path` values to non-existent paths without updating the validation logic
+- Do not put machine-specific absolute paths in `agents.yaml`; `file_path` is relative to the project root and must exist
 - Do not add the 14 unregistered agents to `agents.yaml` without first verifying their `.md` files parse correctly via `AgentPersonality.load_agent()`
