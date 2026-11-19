@@ -3,7 +3,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from property_scout.brief import EMIRATES
-from property_scout.plan import EMIRATE_SLUG, NEW_PROJECT_LOCATION_ID, PF, search_plan
+from property_scout.plan import EMIRATE_SLUG, NEW_PROJECT_TYPE_ID, PF, TYPE_SLUG, search_plan
 
 
 def steps(plan, name):
@@ -11,10 +11,11 @@ def steps(plan, name):
 
 
 class TestTables:
-    def test_every_emirate_has_a_slug_and_a_location_id(self):
+    def test_every_emirate_has_a_slug(self):
         assert set(EMIRATE_SLUG) == set(EMIRATES)
-        assert set(NEW_PROJECT_LOCATION_ID) == set(EMIRATES)
-        assert len(set(NEW_PROJECT_LOCATION_ID.values())) == len(EMIRATES)
+
+    def test_new_project_types_are_ones_the_listing_search_knows(self):
+        assert set(NEW_PROJECT_TYPE_ID) == set(TYPE_SLUG)
 
 
 class TestListingUrls:
@@ -49,8 +50,20 @@ class TestListingUrls:
 class TestOtherSteps:
     def test_new_projects_only_when_off_plan_is_in_scope(self, make_brief):
         assert steps(search_plan(make_brief(market="ready")), "new_projects") == []
-        step = steps(search_plan(make_brief(market="offplan", emirates=["abu_dhabi"], bedrooms_min=2, bedrooms_max=2)), "new_projects")[0]
-        assert step["url"] == f"{PF}/new-projects?l={NEW_PROJECT_LOCATION_ID['abu_dhabi']}&pt=2500000&bdr[]=2"
+        brief = make_brief(market="offplan", emirates=["abu_dhabi"], bedrooms_min=2, bedrooms_max=2)
+        step = steps(search_plan(brief), "new_projects")[0]
+        assert step["url"] == f"{PF}/new-projects/lp/abu-dhabi?bdr[]=2&pt=2500000&cs=off_plan"
+
+    def test_new_projects_narrow_to_community_and_single_type(self, make_brief):
+        brief = make_brief(areas=["Al Marjan Island"], emirates=["ras_al_khaimah"], property_types=["villa"], budget_min=1_000_000)
+        step = steps(search_plan(brief), "new_projects")[0]
+        parts = urlsplit(step["url"])
+        assert parts.path == "/en/new-projects/lp/ras-al-khaimah/al-marjan-island"
+        assert parse_qs(parts.query) == {"pf": ["1000000"], "pt": ["2500000"], "t": [str(NEW_PROJECT_TYPE_ID["villa"])], "cs": ["off_plan"]}
+
+    def test_no_step_pages_through_filtered_results(self, make_brief):
+        for step in search_plan(make_brief(areas=["Dubai Marina"], bedrooms_min=1)):
+            assert "page=" not in step.get("url", "")
 
     def test_sold_benchmark_per_area(self, make_brief):
         plan = search_plan(make_brief(areas=["Dubai Marina", "Business Bay"]))

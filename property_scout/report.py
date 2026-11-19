@@ -65,6 +65,7 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
             {
                 "rank": index,
                 "url": a.listing.url,
+                "evidence": a.listing.evidence,
                 "label": a.listing.label,
                 "verdict": a.verdict,
                 "score": a.score,
@@ -239,7 +240,7 @@ def _card(index: int, a: Assessment, result: Result, lang: str) -> str:
         f"<h4>{t['criteria']}</h4><table>{''.join(rows)}</table>"
         + (f"<h4>{t['flags']}</h4><ul>{flags}</ul>" if flags else "")
         + (f"<h4>{t['costs']}</h4><table>{costs}</table>" if costs else "")
-        + f"<h4>&nbsp;</h4><a href='{escape(listing.url, quote=True)}'>{t['open_listing']} →</a>{extra}</section>"
+        + f"<h4>&nbsp;</h4><a href='{escape(listing.url, quote=True)}'>{t['open_' + listing.evidence]} →</a>{extra}</section>"
     )
 
 

@@ -50,6 +50,7 @@ SHORTLIST_CONFIDENCE = 0.60
 CONSIDER_SCORE = 50.0
 PERMIT_EMIRATES = ("dubai", "abu_dhabi")
 DEVELOPER_TIER_POINTS = {1: 1.0, 2: 0.6, 3: 0.2}
+EVIDENCE_POINTS = {"page": 1.0, "card": 0.5, "lead": 0.0}
 
 
 @dataclass
@@ -218,8 +219,8 @@ def _fit(brief: Brief, listing: Listing, today: date) -> Criterion:
 
 
 def _trust(listing: Listing, today: date) -> Criterion:
-    points: List[float] = []
-    notes: List[Note] = []
+    points: List[float] = [EVIDENCE_POINTS[listing.evidence]]
+    notes: List[Note] = [Note(f"trust.evidence_{listing.evidence}")]
     if listing.permit_number:
         points.append(1.0)
         notes.append(Note("trust.permit"))
@@ -237,8 +238,6 @@ def _trust(listing: Listing, today: date) -> Criterion:
         if listing.registration_verified is not None:
             points.append(1.0 if listing.registration_verified else 0.0)
             notes.append(Note("trust.registered" if listing.registration_verified else "trust.unregistered"))
-    if not points:
-        return Criterion("trust", None, [Note("trust.none")])
     return Criterion("trust", round(100 * sum(points) / len(points), 1), notes)
 
 
@@ -262,6 +261,8 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         flags.append(Flag(severity, Note(f"flag.{code}", params)))
 
     offplan = listing.completion == "offplan"
+    if listing.evidence == "lead":
+        add("critical", "unverified_lead")
     if gap is not None and gap <= IMPLAUSIBLE_GAP:
         add("critical", "implausible_price", gap=gap)
     if offplan and listing.registration_verified is False:
@@ -305,6 +306,8 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("info", "no_benchmark")
     if offplan and listing.annual_rent_aed is not None:
         add("info", "projected_rent")
+    if listing.evidence == "card":
+        add("info", "card_only")
     if listing.observed_on is None:
         add("info", "not_dated")
     return flags

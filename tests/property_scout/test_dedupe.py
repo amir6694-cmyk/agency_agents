@@ -14,6 +14,19 @@ class TestDedupe:
         assert len(kept) == 1
         assert list(folded.values())[0] == ["https://www.portal.example/listing/1?ref=agent"]
 
+    def test_cards_sharing_a_search_page_are_not_merged_on_the_link(self, make_listing):
+        search = "https://portal.example/buy/dubai/1-bedroom-apartments-for-sale-dubai-marina.html?pt=2000000"
+        first = make_listing(url=search, evidence="card", building="Tower A", price_aed=1_500_000)
+        second = make_listing(url=search, evidence="card", building="Tower B", price_aed=1_900_000)
+        kept, folded = dedupe([first, second])
+        assert len(kept) == 2 and folded == {}
+
+    def test_stronger_evidence_breaks_a_price_tie(self, make_listing):
+        card = make_listing(url="https://a.example/search", evidence="card")
+        page = make_listing(url="https://a.example/listing/7", evidence="page")
+        kept, _ = dedupe([card, page])
+        assert kept[0].url == "https://a.example/listing/7"
+
     def test_same_unit_from_two_agents_keeps_the_cheaper(self, make_listing):
         dear = make_listing(url="https://a.example/1", price_aed=1_850_000)
         cheap = make_listing(url="https://b.example/2", price_aed=1_800_000, size_sqft=752)

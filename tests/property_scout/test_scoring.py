@@ -6,6 +6,7 @@ from property_scout.messages import TEXT, render
 from property_scout.scoring import (
     CONSIDER_SCORE,
     DEVELOPER_TIER_POINTS,
+    EVIDENCE_POINTS,
     IMPLAUSIBLE_GAP,
     NEUTRAL,
     OFFPLAN_PREMIUM_LIMIT,
@@ -196,8 +197,24 @@ class TestFit:
 
 
 class TestTrust:
-    def test_unknown_without_any_evidence(self, make_brief, make_listing, today):
-        assert criterion(only(assess(make_brief(), [make_listing()], today)), "trust").score is None
+    @pytest.mark.parametrize("level", sorted(EVIDENCE_POINTS))
+    def test_evidence_level_sets_the_starting_point(self, make_brief, make_listing, today, level):
+        assessment = only(assess(make_brief(), [make_listing(evidence=level)], today))
+        assert criterion(assessment, "trust").score == pytest.approx(100 * EVIDENCE_POINTS[level])
+
+    def test_a_lead_is_never_shortlisted_and_ranks_below_opened_pages(self, make_brief, make_listing, today):
+        strong = dict(price_aed=BENCHMARK * 0.88 * 750, benchmark_psf=BENCHMARK, annual_rent_aed=140_000, service_charge_psf=15)
+        lead = make_listing(url="https://a.example/lead", building="Lead Tower", evidence="lead", **strong)
+        page = make_listing(url="https://a.example/page", building="Page Tower")
+        result = assess(make_brief(), [lead, page], today)
+        assert [a.listing.url for a in result.ranked] == ["https://a.example/page", "https://a.example/lead"]
+        assert result.ranked[1].verdict == "verify_first"
+        assert "unverified_lead" in flag_codes(result.ranked[1])
+
+    def test_a_card_is_noted_as_such(self, make_brief, make_listing, today):
+        card = only(assess(make_brief(), [make_listing(evidence="card")], today))
+        page = only(assess(make_brief(), [make_listing()], today))
+        assert "card_only" in flag_codes(card) and "card_only" not in flag_codes(page)
 
     def test_missing_permit_is_a_note_not_a_penalty(self, make_brief, make_listing, today):
         assessment = only(assess(make_brief(), [make_listing(verified=True)], today))
@@ -211,14 +228,14 @@ class TestTrust:
         assert "no_permit" not in flag_codes(assessment)
 
     def test_old_sightings_and_unverified_adverts_lose_trust(self, make_brief, make_listing, today):
-        listing = make_listing(verified=False, observed_on="2026-09-01")
+        listing = make_listing(evidence="lead", verified=False, observed_on="2026-09-01")
         assert criterion(only(assess(make_brief(), [listing], today)), "trust").score == 0
 
     @pytest.mark.parametrize("tier", sorted(DEVELOPER_TIER_POINTS))
     def test_developer_tier_drives_off_plan_trust(self, make_brief, make_listing, today, tier):
         listing = make_listing(completion="offplan", sale_type="primary", developer_tier=tier)
         score = criterion(only(assess(make_brief(), [listing], today)), "trust").score
-        assert score == pytest.approx(100 * DEVELOPER_TIER_POINTS[tier])
+        assert score == pytest.approx(100 * (EVIDENCE_POINTS["page"] + DEVELOPER_TIER_POINTS[tier]) / 2)
 
     def test_registration_states(self, make_brief, make_listing, today):
         def run(state):
@@ -256,8 +273,9 @@ class TestTerms:
 
 
 class TestScoreAndVerdict:
-    def test_no_evidence_scores_neutral_with_zero_confidence(self, make_brief, make_listing, today):
-        assessment = only(assess(make_brief(), [make_listing()], today))
+    def test_no_data_scores_neutral_with_zero_confidence(self, make_brief, make_listing, today):
+        brief = make_brief(weights={"value": 1, "yield": 1, "fit": 0, "trust": 0, "terms": 0})
+        assessment = only(assess(brief, [make_listing()], today))
         assert assessment.score == NEUTRAL
         assert assessment.confidence == 0
         assert assessment.verdict == "consider"

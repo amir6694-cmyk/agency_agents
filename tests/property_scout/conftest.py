@@ -29,6 +29,7 @@ def make_listing():
         data = {
             "url": "https://portal.example/listing/1",
             "price_aed": 1_800_000,
+            "evidence": "page",
             "emirate": "dubai",
             "community": "Dubai Marina",
             "building": "Marina Gate 1",

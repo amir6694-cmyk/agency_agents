@@ -22,6 +22,26 @@ This repository contains a comprehensive **Development Workflow Protocol** that 
 
 ---
 
+## 🏠 UAE Property Scout
+
+A buy-side sourcing agent for UAE property, with a deterministic engine behind it.
+
+- **Agent**: `agents/real-estate/real-estate-uae-property-scout.md`, also installed for Claude Code at `.claude/agents/uae-property-scout.md`. Give it a brief (budget, off-plan or ready, emirate and areas, type, bedrooms, purpose) in English or Russian. It returns a ranked shortlist of live offers, each priced against registered sales, costed with every fee, and marked with what could not be verified.
+- **Engine**: `property_scout/`, a stdlib-only package the agent calls so that costs, yields, scores and rankings are reproducible.
+
+```bash
+pip install -e ".[dev]"
+property-scout template brief > brief.json
+property-scout template listings > listings.json
+property-scout plan --brief brief.json
+property-scout costs --price 2000000 --emirate dubai --sale-type resale
+property-scout score --brief brief.json --listings listings.json --format html --lang ru --out shortlist.html
+```
+
+In a Claude Code session opened in this repository, describe what the buyer wants and the session delegates to the `uae-property-scout` agent.
+
+---
+
 ## 📚 Repository Structure
 
 ```

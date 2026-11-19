@@ -1,6 +1,6 @@
 # Agency Agents Project To-Do List
 
-Last Updated: 2026-08-22
+Last Updated: 2026-11-19
 
 ## In Progress
 - No tasks currently in progress
@@ -9,6 +9,14 @@ Last Updated: 2026-08-22
 - No pending tasks
 
 ## Recent Updates
+- [x] Add UAE Property Scout agent and property_scout engine
+  - Completed: 2026-11-19
+  - Branch: claude/practical-gauss-1au7f9
+  - Added: agents/real-estate/real-estate-uae-property-scout.md, registered in agents.yaml (real-estate category) and installed at .claude/agents/
+  - Added: property_scout/ (plan, comps, costs, score) with tests in tests/property_scout/, joined to the CI gate
+  - Fixed: agents.yaml file paths are project-relative; router suite went from 254 failures to 3
+  - Open: the three remaining router failures are product decisions (agent count, protocol flags)
+
 - [x] Add GitHub Actions CI
   - Completed: 2026-08-22
   - Branch: claude/ci-workflow-setup

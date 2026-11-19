@@ -21,15 +21,7 @@ EMIRATE_SLUG = {
     "umm_al_quwain": "umm-al-quwain",
     "fujairah": "fujairah",
 }
-NEW_PROJECT_LOCATION_ID = {
-    "dubai": 1,
-    "umm_al_quwain": 2,
-    "ras_al_khaimah": 3,
-    "sharjah": 4,
-    "ajman": 5,
-    "abu_dhabi": 6,
-    "fujairah": 7,
-}
+NEW_PROJECT_TYPE_ID = {"apartment": 1, "penthouse": 20, "townhouse": 22, "villa": 35}
 TYPE_SLUG = {
     "apartment": "apartments",
     "villa": "villas",
@@ -38,6 +30,7 @@ TYPE_SLUG = {
 }
 COMPLETION_PARAM = {"ready": "completed", "offplan": "off_plan"}
 MAX_BED_VARIANTS = 4
+FRESH = "the reader may serve a copy up to two weeks old: add &cb= with any unused value to force a fresh read"
 NEWS_DOMAINS = [
     "khaleejtimes.com",
     "gulfnews.com",
@@ -93,8 +86,9 @@ def listing_search_urls(brief: Brief) -> List[Dict[str, Any]]:
                             "step": "listings",
                             "channel": "propertyfinder",
                             "url": f"{PF}/buy/{path}?{_query(brief, completion)}",
-                            "check": "page title must name the community, bedroom count and type; "
-                            "order is newest-first, add &page=2 for more or narrow pf/pt to hunt the cheapest",
+                            "check": "page title must name the community, bedroom count and type; order is "
+                            "newest-first with 25 cards, so split pf/pt into narrower bands to see more or to "
+                            "hunt the cheapest; " + FRESH,
                         }
                     )
     return steps
@@ -103,22 +97,27 @@ def listing_search_urls(brief: Brief) -> List[Dict[str, Any]]:
 def new_project_urls(brief: Brief) -> List[Dict[str, Any]]:
     if brief.market == "ready":
         return []
+    params: List[str] = [f"bdr[]={beds}" for beds in _bed_options(brief) if beds is not None]
+    if brief.budget_min:
+        params.append(f"pf={brief.budget_min:.0f}")
+    params.append(f"pt={brief.budget_max:.0f}")
+    if len(brief.property_types) == 1 and brief.property_types[0] in NEW_PROJECT_TYPE_ID:
+        params.append(f"t={NEW_PROJECT_TYPE_ID[brief.property_types[0]]}")
+    params.append("cs=off_plan")
     steps: List[Dict[str, Any]] = []
     for emirate in brief.emirates or ["dubai"]:
-        params = [f"l={NEW_PROJECT_LOCATION_ID[emirate]}"]
-        if brief.budget_min:
-            params.append(f"pf={brief.budget_min:.0f}")
-        params.append(f"pt={brief.budget_max:.0f}")
-        params += [f"bdr[]={beds}" for beds in _bed_options(brief) if beds is not None]
-        steps.append(
-            {
-                "step": "new_projects",
-                "channel": "propertyfinder",
-                "url": f"{PF}/new-projects?{'&'.join(params)}",
-                "check": "heading count must be lower than the unfiltered UAE total; "
-                "drop cards marked Sold out or Ready and those outside the handover window",
-            }
-        )
+        places = [f"/{_hyphen(area)}" for area in brief.areas] or [""]
+        for place in places:
+            steps.append(
+                {
+                    "step": "new_projects",
+                    "channel": "propertyfinder",
+                    "url": f"{PF}/new-projects/lp/{EMIRATE_SLUG[emirate]}{place}?{'&'.join(params)}",
+                    "check": "the heading must name the place and give a count; drop cards marked Sold out "
+                    "or Ready and those whose delivery date is past the brief's limit; a launch price is "
+                    "historic, open the project page for the current one; " + FRESH,
+                }
+            )
     return steps
 
 

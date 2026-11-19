@@ -58,7 +58,7 @@ class TestScore:
 
     def test_bad_listing_names_the_problem(self, files, capsys):
         brief, listings, _ = files
-        listings.write_text(json.dumps([{"url": "https://x.example/1", "price_aed": 1, "cost": 2}]))
+        listings.write_text(json.dumps([{"url": "https://x.example/1", "price_aed": 1, "evidence": "page", "cost": 2}]))
         assert main(["score", "--brief", str(brief), "--listings", str(listings)]) == 2
         assert "cost" in capsys.readouterr().err
 

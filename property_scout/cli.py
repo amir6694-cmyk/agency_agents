@@ -51,6 +51,7 @@ BRIEF_TEMPLATE = {
 
 LISTING_TEMPLATE = {
     "url": "https://example.com/listing/123",
+    "evidence": "page",
     "source": "propertyfinder",
     "title": "",
     "price_aed": 1850000,

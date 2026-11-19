@@ -1,6 +1,6 @@
 import pytest
 
-from property_scout.listing import PLAN_STAGES, Listing, ListingError
+from property_scout.listing import EVIDENCE, PLAN_STAGES, Listing, ListingError
 
 
 class TestListingParsing:
@@ -17,20 +17,24 @@ class TestListingParsing:
         assert listing.emirate == "ras_al_khaimah"
         assert listing.tags == ["sea_view"]
 
+    @pytest.mark.parametrize("level", EVIDENCE)
+    def test_accepts_every_evidence_level(self, make_listing, level):
+        assert make_listing(evidence=level.upper()).evidence == level
+
     def test_label_prefers_building_then_community(self, make_listing):
         assert make_listing().label == "Marina Gate 1, Dubai Marina"
 
     def test_label_falls_back_to_title_then_url(self):
-        titled = Listing.from_dict({"url": "https://x.example/1", "price_aed": 1, "title": "Sea view flat"})
-        bare = Listing.from_dict({"url": "https://x.example/1", "price_aed": 1})
+        titled = Listing.from_dict({"url": "https://x.example/1", "price_aed": 1, "evidence": "card", "title": "Sea view flat"})
+        bare = Listing.from_dict({"url": "https://x.example/1", "price_aed": 1, "evidence": "card"})
         assert titled.label == "Sea view flat"
         assert bare.label == "https://x.example/1"
 
 
 class TestListingValidation:
-    @pytest.mark.parametrize("missing", ["url", "price_aed"])
-    def test_requires_url_and_price(self, missing):
-        data = {"url": "https://x.example/1", "price_aed": 1_000_000}
+    @pytest.mark.parametrize("missing", ["url", "price_aed", "evidence"])
+    def test_requires_url_price_and_evidence_level(self, missing):
+        data = {"url": "https://x.example/1", "price_aed": 1_000_000, "evidence": "page"}
         del data[missing]
         with pytest.raises(ListingError, match=missing):
             Listing.from_dict(data)
@@ -38,16 +42,17 @@ class TestListingValidation:
     @pytest.mark.parametrize("url", ["javascript:alert(1)", "portal.example/listing/1", "file:///etc/passwd"])
     def test_url_must_be_a_web_link(self, url):
         with pytest.raises(ListingError, match="http"):
-            Listing.from_dict({"url": url, "price_aed": 1_000_000})
+            Listing.from_dict({"url": url, "price_aed": 1_000_000, "evidence": "page"})
 
     def test_names_unknown_fields(self):
         with pytest.raises(ListingError, match="price"):
-            Listing.from_dict({"url": "https://x.example/1", "price_aed": 1, "price": 2})
+            Listing.from_dict({"url": "https://x.example/1", "price_aed": 1, "evidence": "page", "price": 2})
 
     @pytest.mark.parametrize(
         "field, value",
         [
             ("price_aed", -5),
+            ("evidence", "rumour"),
             ("emirate", "doha"),
             ("completion", "derelict"),
             ("sale_type", "auction"),

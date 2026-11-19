@@ -154,9 +154,9 @@ jobs:
             echo "could not collect tests (exit $status) - treating as failure"
             exit 1
           fi
-          echo "collected $collected tests (baseline 487)"
-          if [ "$collected" -lt 487 ]; then
-            echo "the narrow gate shrank below its 487-test baseline."
+          echo "collected $collected tests (baseline 501)"
+          if [ "$collected" -lt 501 ]; then
+            echo "the narrow gate shrank below its 501-test baseline."
             echo "if tests were removed on purpose, lower the baseline in this step."
             exit 1
           fi

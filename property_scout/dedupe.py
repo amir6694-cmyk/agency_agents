@@ -3,7 +3,7 @@
 from typing import Dict, List, Tuple
 from urllib.parse import urlsplit
 
-from .listing import Listing
+from .listing import EVIDENCE, Listing
 from .text import norm
 
 SIZE_TOLERANCE = 0.02
@@ -19,7 +19,8 @@ def canonical_url(url: str) -> str:
 
 
 def _same_unit(a: Listing, b: Listing) -> bool:
-    if canonical_url(a.url) == canonical_url(b.url):
+    # A card's link is the search page it was seen on, which many different units share.
+    if a.evidence == b.evidence == "page" and canonical_url(a.url) == canonical_url(b.url):
         return True
     if not (a.building and b.building and a.size_sqft and b.size_sqft):
         return False
@@ -34,15 +35,15 @@ def _same_unit(a: Listing, b: Listing) -> bool:
     return size_close and price_close
 
 
-def _preference(listing: Listing) -> Tuple[float, int, int]:
+def _preference(listing: Listing) -> Tuple[float, int, int, int]:
     filled = sum(1 for value in vars(listing).values() if value not in (None, "", [], {}))
-    return (listing.price_aed, 0 if listing.verified else 1, -filled)
+    return (listing.price_aed, EVIDENCE.index(listing.evidence), 0 if listing.verified else 1, -filled)
 
 
 def dedupe(listings: List[Listing]) -> Tuple[List[Listing], Dict[str, List[str]]]:
     """Return one listing per unit plus, per kept URL, the URLs folded into it.
 
-    The cheapest advert of a unit wins; a verified one breaks a price tie.
+    The cheapest advert of a unit wins; stronger evidence, then a verified badge, break a price tie.
     """
     parent = list(range(len(listings)))
 
