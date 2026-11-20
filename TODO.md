@@ -1,6 +1,6 @@
 # Agency Agents Project To-Do List
 
-Last Updated: 2026-11-19
+Last Updated: 2026-11-20
 
 ## In Progress
 - No tasks currently in progress
@@ -9,6 +9,14 @@ Last Updated: 2026-11-19
 - No pending tasks
 
 ## Recent Updates
+- [x] Revise the property_scout engine and the UAE Property Scout definition after trials and independent review
+  - Completed: 2026-11-20
+  - Branch: claude/practical-gauss-1au7f9
+  - Changed: strict input typing (fields.py), Central Bank lending ceilings and own funds, Abu Dhabi and ADGM fee rules, trust scored over every check, partial evidence, verdict caps (only an opened page is shortlisted), duplicate folding without chains, place aliases
+  - Changed: report prints agent, date seen, permit, register entry, notes and sources; Markdown and HTML escape advert text
+  - Changed: agent definition corrected against two fact-check passes and three trial runs; tests tie it to the engine's constants, fields and commands
+  - Verified: awk recomputation in tests/validation/test_property_scout_math.sh; scripted mutation run
+
 - [x] Add UAE Property Scout agent and property_scout engine
   - Completed: 2026-11-19
   - Branch: claude/practical-gauss-1au7f9

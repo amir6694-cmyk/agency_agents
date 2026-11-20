@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from property_scout.metrics import benchmark_gap, gross_yield, net_yield, plan_cashflows, plan_value
+from property_scout.metrics import benchmark_gap, gross_yield, months_to_handover, net_yield, plan_cashflows, plan_value
 
 
 class TestBenchmarkGap:
@@ -27,8 +27,33 @@ class TestYields:
         net = net_yield(listing, total_cost=2_100_000, running_cost_ratio=0.10)
         assert net == pytest.approx((130_000 - 18_000 - 13_000) / 2_100_000)
 
-    def test_net_yield_unknown_without_service_charge(self, make_listing):
-        assert net_yield(make_listing(annual_rent_aed=100_000), 2_000_000, 0.10) is None
+    @pytest.mark.parametrize("missing", ["annual_rent_aed", "service_charge_psf", "size_sqft"])
+    def test_net_yield_needs_rent_service_charge_and_size(self, make_listing, missing):
+        facts = {"annual_rent_aed": 100_000, "service_charge_psf": 15, "size_sqft": 750}
+        facts[missing] = None
+        assert net_yield(make_listing(**facts), 2_000_000, 0.10) is None
+
+
+class TestMonthsToHandover:
+    def test_counts_to_the_start_of_the_period(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2028-Q4")
+        assert months_to_handover(listing, today) == 23
+
+    def test_the_register_date_is_used_over_the_advert(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2027-11", register_completion="2028-05")
+        assert months_to_handover(listing, today) == 18
+
+    def test_a_past_date_is_now(self, make_listing, today):
+        assert months_to_handover(make_listing(completion="offplan", handover="2026-Q1"), today) == 0
+
+    def test_a_finished_unit_is_handed_over_now(self, make_listing, today):
+        listing = make_listing(payment_plan={"on_booking": 60, "post_handover": 40}, post_handover_months=24)
+        assert months_to_handover(listing, today) == 0
+
+    @pytest.mark.parametrize("completion", ["offplan", None])
+    def test_unknown_when_money_is_deferred_to_an_undated_handover(self, make_listing, today, completion):
+        listing = make_listing(completion=completion, payment_plan={"on_booking": 20, "on_handover": 80})
+        assert months_to_handover(listing, today) is None
 
 
 class TestPaymentPlanValue:
@@ -48,13 +73,13 @@ class TestPaymentPlanValue:
         )
         flows = plan_cashflows(listing, today)
         assert sum(share for _, share in flows) == pytest.approx(1.0)
-        assert max(month for month, _ in flows) == 25 + 36
+        assert max(month for month, _ in flows) == 23 + 36
 
     def test_paying_everything_today_is_worth_full_price(self, make_listing, today):
-        listing = make_listing(payment_plan={"on_booking": 100})
-        value = plan_value(listing, today, 0.07)
+        value = plan_value(make_listing(payment_plan={"on_booking": 100}), today, 0.07)
         assert value.present_value_ratio == pytest.approx(1.0)
         assert value.deferral_benefit == pytest.approx(0.0)
+        assert value.booking_pct == 100
 
     def test_single_payment_at_handover_discounts_exactly(self, make_listing):
         listing = make_listing(completion="offplan", handover="2027-11", payment_plan={"on_handover": 100})
@@ -69,6 +94,14 @@ class TestPaymentPlanValue:
         value = plan_value(listing, date(2026, 11, 19), rate)
         assert value.months_to_handover == 2
         assert value.present_value_ratio == pytest.approx(0.5 / (1 + monthly) + 0.5 / (1 + monthly) ** 2)
+
+    def test_a_vague_date_cannot_flatter_the_plan(self, make_listing, today):
+        plan = {"on_booking": 20, "on_handover": 80}
+        quarter = make_listing(completion="offplan", handover="2028-Q4", payment_plan=plan)
+        month = make_listing(completion="offplan", handover="2028-10", payment_plan=plan)
+        year = make_listing(completion="offplan", handover="2028", payment_plan=plan)
+        assert plan_value(quarter, today, 0.06).deferral_benefit == pytest.approx(plan_value(month, today, 0.06).deferral_benefit)
+        assert plan_value(year, today, 0.06).deferral_benefit < plan_value(quarter, today, 0.06).deferral_benefit
 
     def test_zero_rate_means_no_benefit(self, make_listing, today):
         listing = make_listing(completion="offplan", handover="2029-Q4", payment_plan={"on_booking": 20, "on_handover": 80})
@@ -85,9 +118,10 @@ class TestPaymentPlanValue:
         assert value.months_to_handover == 0
         assert value.present_value_ratio == pytest.approx(1.0)
 
-    def test_reports_share_due_before_handover(self, make_listing, today):
+    def test_reports_shares_due_at_booking_and_before_handover(self, make_listing, today):
         listing = make_listing(completion="offplan", handover="2028-Q4", payment_plan={"on_booking": 20, "during_construction": 40, "on_handover": 40})
-        assert plan_value(listing, today, 0.07).paid_before_handover_pct == 60
+        value = plan_value(listing, today, 0.07)
+        assert (value.booking_pct, value.paid_before_handover_pct) == (20, 60)
 
     @pytest.mark.parametrize("rate, published", [(0.04, 0.026), (0.06, 0.037)])
     def test_matches_a_published_worked_example(self, make_listing, today, rate, published):

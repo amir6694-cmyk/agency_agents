@@ -1,18 +1,22 @@
 """Benchmark from raw comparable rows: the median, not a portal's headline average."""
 
 from calendar import monthrange
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from statistics import median
 from typing import Any, Dict, List, Optional
 
-from .text import completion_slug
+from .fields import Check, InputError
+from .text import completion_slug, norm
 
 SIZE_BAND = 0.20
 MIN_COMPS = 5
+CONCENTRATION_LIMIT = 0.5
+FULL_YEAR_MONTHS = 12
 
 
-class CompsError(ValueError):
+class CompsError(InputError):
     pass
 
 
@@ -24,7 +28,14 @@ class CompSummary:
     low_psf: Optional[float]
     high_psf: Optional[float]
     median_price: Optional[float]
+    first_date: Optional[str]
+    last_date: Optional[str]
+    largest_project_share: Optional[float]
     thin: bool
+
+    @property
+    def concentrated(self) -> bool:
+        return self.largest_project_share is not None and self.largest_project_share > CONCENTRATION_LIMIT
 
 
 def _months_back(today: date, months: int) -> date:
@@ -39,38 +50,56 @@ def summarise(
     subject_size_sqft: Optional[float] = None,
     months: int = 3,
     completion: Optional[str] = None,
+    new_leases: bool = False,
 ) -> CompSummary:
-    """Median price per sqft of the rows that are comparable to the subject.
+    """Median of the rows that are comparable to the subject.
 
-    Each row needs price_aed and size_sqft; date (ISO) and completion are used
-    when present. Rows outside the size band, the look-back window or the wanted
-    completion status are dropped and counted, so the caller can report them.
+    A row needs price_aed and size_sqft; date, completion, project, contract and
+    term_months are used when present. Rows outside the size band, the look-back
+    window or the wanted completion status are dropped and counted, as are
+    renewals and short lets when only new twelve-month leases are wanted.
     """
     wanted = completion_slug(completion) if completion else None
     earliest = _months_back(today, months)
-    dropped = {"incomplete": 0, "size": 0, "date": 0, "completion": 0}
+    dropped = {"incomplete": 0, "size": 0, "date": 0, "completion": 0, "contract": 0}
     psf: List[float] = []
     prices: List[float] = []
-    for row in rows:
+    dates: List[str] = []
+    projects: Counter = Counter()
+    for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
-            raise CompsError("each comparable must be a JSON object")
-        price, size = row.get("price_aed"), row.get("size_sqft")
-        if not price or not size or price <= 0 or size <= 0:
+            raise CompsError(f"row {index}: each comparable must be a JSON object")
+        check = Check(CompsError, f"row {index}")
+        price = check.number("price_aed", row.get("price_aed"), open_low=False)
+        size = check.number("size_sqft", row.get("size_sqft"), open_low=False)
+        day = check.day("date", row.get("date"))
+        if not price or not size:
             dropped["incomplete"] += 1
             continue
         if subject_size_sqft and abs(size - subject_size_sqft) > SIZE_BAND * subject_size_sqft:
             dropped["size"] += 1
             continue
-        if row.get("date") and date.fromisoformat(row["date"]) < earliest:
+        if day and date.fromisoformat(day) < earliest:
             dropped["date"] += 1
             continue
-        if wanted and row.get("completion") and completion_slug(row["completion"]) != wanted:
+        if wanted and row.get("completion") and completion_slug(check.text("completion", row["completion"])) != wanted:
             dropped["completion"] += 1
             continue
+        if new_leases:
+            renewed = norm(check.text("contract", row.get("contract"))) not in ("", "new")
+            term = check.number("term_months", row.get("term_months"))
+            if renewed or (term is not None and term != FULL_YEAR_MONTHS):
+                dropped["contract"] += 1
+                continue
         psf.append(price / size)
         prices.append(price)
+        if day:
+            dates.append(day)
+        project = norm(check.text("project", row.get("project")))
+        if project:
+            projects[project] += 1
     if not psf:
-        return CompSummary(0, dropped, None, None, None, None, thin=True)
+        return CompSummary(0, dropped, None, None, None, None, None, None, None, thin=True)
     return CompSummary(
         used=len(psf),
         dropped=dropped,
@@ -78,5 +107,8 @@ def summarise(
         low_psf=min(psf),
         high_psf=max(psf),
         median_price=median(prices),
+        first_date=min(dates) if dates else None,
+        last_date=max(dates) if dates else None,
+        largest_project_share=max(projects.values()) / len(psf) if projects else None,
         thin=len(psf) < MIN_COMPS,
     )

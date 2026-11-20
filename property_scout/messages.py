@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any, Dict
 
 LANGUAGES = ("en", "ru")
+MONTHS_EN = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
 
 
 @dataclass
@@ -13,13 +14,13 @@ class Note:
     params: Dict[str, Any] = field(default_factory=dict)
 
 
+def grouped(value: float, lang: str = "en") -> str:
+    text = f"{value:,.0f}"
+    return text.replace(",", " ") if lang == "ru" else text
+
+
 def aed(value: float, lang: str = "en") -> str:
-    if lang == "ru":
-        return f"{value:,.0f}".replace(",", " ") + " AED"
-    return f"AED {value:,.0f}"
-
-
-MONTHS_EN = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+    return f"{grouped(value, lang)} AED" if lang == "ru" else f"AED {grouped(value)}"
 
 
 def long_date(day: date, lang: str = "en") -> str:
@@ -30,17 +31,24 @@ def long_date(day: date, lang: str = "en") -> str:
 
 def pct(value: float, signed: bool = False, lang: str = "en") -> str:
     text = f"{value * 100:+.1f}%" if signed else f"{value * 100:.1f}%"
-    text = text.replace("-", "\u2212")
+    text = text.replace("-", "−")
+    return text.replace(".", ",") if lang == "ru" else text
+
+
+def rate(value: float, lang: str = "en") -> str:
+    text = f"{value * 100:.4g}%"
     return text.replace(".", ",") if lang == "ru" else text
 
 
 TEXT: Dict[str, Dict[str, str]] = {
     "en": {
         "value.scored": "{psf}/sqft is {gap} vs benchmark {benchmark}/sqft{basis}",
+        "value.thin": "fewer than five comparable sales, or their number not recorded: score held halfway to neutral",
         "value.no_size": "unscored: size not stated",
         "value.no_benchmark": "unscored: no sold-price benchmark",
         "yield.net": "net {net}, gross {gross}{basis}",
-        "yield.gross": "gross {gross}, net unknown{basis}",
+        "yield.gross": "gross {gross}; net estimated at {net} after typical costs because the service charge is not known{basis}",
+        "yield.thin": "fewer than five rent contracts, or their number not recorded",
         "yield.none": "unscored: no rent evidence",
         "fit.none": "no stated preferences to test",
         "fit.area_hit": "in a preferred area",
@@ -49,56 +57,84 @@ TEXT: Dict[str, Dict[str, str]] = {
         "fit.size": "{size} sqft vs {wanted} wanted",
         "fit.handover_ok": "handover in time",
         "fit.handover_late": "handover {late} months after the deadline",
+        "fit.handover_unknown": "handover date not known",
         "trust.evidence_page": "its own page was opened",
         "trust.evidence_card": "seen as a card on a search page",
         "trust.evidence_lead": "search-engine lead, not opened",
-        "trust.permit": "advert permit shown",
-        "trust.verified": "portal-verified",
-        "trust.unverified": "not portal-verified",
+        "trust.not_dated": "date seen not recorded",
+        "trust.seen_future": "date seen is in the future",
         "trust.seen": "seen live {age} days ago",
         "trust.seen_today": "seen live today",
+        "trust.permit": "advert permit captured",
+        "trust.verified": "portal-verified",
+        "trust.unverified": "not portal-verified",
+        "trust.unchecked": "no permit or portal verification captured",
         "trust.tier": "developer tier {tier}",
-        "trust.registered": "project registration verified",
-        "trust.unregistered": "project registration not found",
+        "trust.tier_unknown": "developer's record not assessed",
+        "trust.registered": "project found in the register",
+        "trust.unregistered": "project not found in the register",
+        "trust.registration_unchecked": "register not checked",
+        "terms.resale": "a resale: the developer's plan is not the buyer's cash flow",
         "terms.na": "no developer payment plan",
         "terms.missing": "unscored: payment plan or handover date missing",
         "terms.scored": "plan is worth {pv} of the price today at {rate} a year; {before}% due before handover",
+        "terms.waiver": "transfer fee of {rate} waived",
+        "flag.analyst": "analyst's check: {text}",
         "flag.unverified_lead": "unverified lead: the page could not be opened, so price and availability are whatever a search engine last saw; open the link before relying on it",
-        "flag.card_only": "seen as a card on the portal's search page; its own page was not opened, so the link leads to that search",
         "flag.implausible_price": "asking price is {gap} vs the benchmark: confirm the unit exists, the size is right and it is not bait before relying on it",
-        "flag.registration_not_found": "project registration or escrow could not be found: do not proceed until the developer supplies it",
+        "flag.implausible_yield": "a gross yield of {gross} is not credible: check the rent figure and whether the price is the full price",
+        "flag.registration_not_found": "the project was looked for in the register and not found: do not proceed until the developer supplies its registration and escrow details",
+        "flag.overpriced": "asks {gap} against registered sales: only worth pursuing at a much lower price",
+        "flag.thin_benchmark": "the benchmark rests on fewer than five sales, or their number was not recorded: treat the gap as indicative",
+        "flag.from_price": "a 'from' price: it belongs to the smallest or least favoured unit, get the price of a specific unit in writing",
         "flag.completion_unknown": "completion status not stated: off-plan and ready prices are not comparable",
         "flag.size_missing": "size not stated: price per sqft and value cannot be assessed",
-        "flag.no_permit": "advertising permit number not captured: scan the advert's QR code or ask the broker for it before engaging",
         "flag.stale": "listed {days} days ago: may be sold, or negotiable",
-        "flag.registration_unchecked": "project registration and escrow not yet verified",
+        "flag.seen_in_future": "the date seen, {seen}, is after the valuation date: no credit given for freshness",
+        "flag.registration_unchecked": "project registration and escrow not yet checked: not eligible for the shortlist until they are",
         "flag.developer_unproven": "developer has a thin or troubled delivery record",
-        "flag.offplan_premium": "priced {premium} above ready homes of the same size nearby: off-plan usually carries a premium, this one is large",
+        "flag.offplan_premium": "priced {premium} above ready homes of the same size nearby, more than the usual off-plan premium",
+        "flag.register_overdue": "the register's completion date, {date}, has passed and the project is not finished",
+        "flag.handover_passed": "the advertised handover, {handover}, has passed and the unit is still sold as off-plan",
+        "flag.handover_mismatch": "the advert says handover {advert}, the register says {register}: the register's date is used",
+        "flag.handover_unknown": "handover date not known, so the brief's deadline could not be tested",
         "flag.late_handover": "handover {handover} is {late} months after the brief's {wanted}",
-        "flag.tenanted": "tenanted: vacant possession depends on the tenancy and statutory notice",
-        "flag.costs_exceed_budget": "price fits, but with acquisition costs the outlay is {outlay}",
-        "flag.no_benchmark": "no sold-price benchmark supplied: the price is an asking price only",
-        "flag.thin_benchmark": "comparable sales behind the benchmark: {count}. Too few to lean on; widen the comparables or treat the gap as indicative",
-        "flag.projected_rent": "rent is a projection for an unbuilt unit, not an achieved figure",
-        "flag.not_dated": "no date recorded for when the listing was seen live",
+        "flag.inspection_stale": "the register's progress figure was last inspected on {inspected}, over three months ago",
+        "flag.tenanted": "tenanted: vacant possession depends on the tenancy and statutory notice, so it is not shortlisted for own use",
+        "flag.emirate_missing": "emirate not stated: fees could not be calculated and the outlay shown is the price only",
         "flag.cost_rates_unknown": "this emirate publishes no fee schedule: the outlay shown is the price only, obtain a written quote",
-        "flag.cost_rates_indicative": "this emirate publishes only part of its fee schedule: costs are indicative and exclude agency commission, obtain a written quote",
-        "flag.offplan_finance": "off-plan: bank finance is capped at {cap} of the price, so costs are shown without a loan",
-        "flag.ltv_over_cap": "the {ltv} loan asked for is above the Central Bank's {cap} ceiling for this purchase",
-        "flag.golden_visa_conditions": "Golden Visa on a mortgaged or off-plan unit: official pages disagree on how much must be paid up, confirm with DLD or GDRFA before relying on it",
+        "flag.cost_rates_partial": "this emirate publishes only its registration fee: agency commission and mortgage registration are not included, obtain a written quote",
+        "flag.waiver_ignored": "a fee waiver was recorded on a resale: a developer cannot waive the fee on a resale, so it is charged in full",
+        "flag.offplan_finance": "off-plan: bank finance is capped at {cap} of the price and seldom available before handover, so costs are shown without a loan",
+        "flag.ltv_capped": "the {ltv} loan asked for is above the Central Bank's {cap} ceiling for this purchase: figures use {cap}",
+        "flag.non_resident_finance": "non-resident buyer: banks usually lend well below the Central Bank ceiling, get a pre-approval before relying on the loan",
+        "flag.visa_margin": "priced within 5% of the {threshold} Golden Visa threshold: the test is on the registered value, so a negotiated discount can lose eligibility",
+        "flag.visa_benchmark_below": "comparable sales imply about {implied}, under the {threshold} threshold: the asking price may be set for the visa rather than by the market",
+        "flag.visa_conditions": "Golden Visa on a mortgaged or off-plan unit: official pages disagree on how much must be paid up, confirm with the emirate's land department or immigration authority first",
+        "flag.transfer_seller_pays": "this island is registered by ADGM, whose rules put the 2% transfer fee on the seller: confirm it in the sale contract",
+        "flag.transfer_split": "by default the 2% registration fee is shared equally with the seller; it is shown here in full on the buyer, as contracts often put it",
+        "flag.costs_exceed_budget": "price fits, but with acquisition costs the outlay is {outlay}",
+        "flag.no_permit": "advertising permit number not captured: scan the advert's QR code or ask the broker for it before engaging",
+        "flag.no_benchmark": "no sold-price benchmark supplied: the price is an asking price only",
+        "flag.projected_rent": "rent is a projection for an unbuilt unit, not an achieved figure",
+        "flag.low_turnover": "{sales} registered sales in this building in twelve months: reselling may be slow",
+        "flag.card_only": "seen as a card on the portal's search page; its own page was not opened, so it is not shortlisted and the link leads to that search",
+        "flag.advertised_lower": "the same unit is also advertised at {price}: see the other links",
         "reject.over_budget": "price {spend} is over the {budget} budget",
         "reject.over_budget_costs": "price plus acquisition costs {spend} is over the {budget} budget",
         "reject.under_budget": "price {price} is under the {minimum} minimum",
         "reject.market": "{completion} listing, brief asks for {market}",
-        "reject.emirate": "emirate {emirate} is outside the brief",
-        "reject.type": "property type {type} is outside the brief",
+        "reject.emirate": "{emirate} is outside the brief",
+        "reject.type": "property type '{type}' is outside the brief",
         "reject.beds_low": "{beds} bedrooms, brief needs at least {wanted}",
         "reject.beds_high": "{beds} bedrooms, brief allows at most {wanted}",
         "reject.area": "outside the areas the brief is restricted to",
         "reject.excluded": "matches the brief's exclusion '{term}'",
+        "reject.handover": "handover {handover} is after the brief's deadline of {wanted}",
         "reject.golden_visa": "price is under the {threshold} Golden Visa property threshold",
         "cost.transfer_fee": "Transfer fee, {rate} of the price",
         "cost.transfer_fee_waived": "Transfer fee of {rate} waived by the developer: get the waiver in writing",
+        "cost.transfer_fee_seller": "Transfer fee of {rate}: the seller's under ADGM rules",
         "cost.registration_fee": "Registration and title deed fees",
         "cost.trustee_fee": "Registration trustee fee, VAT included",
         "cost.agency_fee": "Agency commission, {rate} plus VAT",
@@ -106,10 +142,12 @@ TEXT: Dict[str, Dict[str, str]] = {
     },
     "ru": {
         "value.scored": "{psf}/кв. фут — {gap} к бенчмарку {benchmark}/кв. фут{basis}",
+        "value.thin": "сопоставимых сделок меньше пяти либо их число не записано: балл сдвинут наполовину к нейтральному",
         "value.no_size": "не оценено: площадь не указана",
         "value.no_benchmark": "не оценено: нет бенчмарка по ценам сделок",
         "yield.net": "чистая {net}, валовая {gross}{basis}",
-        "yield.gross": "валовая {gross}, чистая неизвестна{basis}",
+        "yield.gross": "валовая {gross}; чистая оценена в {net} после типовых расходов, так как сервисный сбор неизвестен{basis}",
+        "yield.thin": "договоров аренды меньше пяти либо их число не записано",
         "yield.none": "не оценено: нет данных об аренде",
         "fit.none": "предпочтения для проверки не заданы",
         "fit.area_hit": "в предпочтительном районе",
@@ -118,56 +156,84 @@ TEXT: Dict[str, Dict[str, str]] = {
         "fit.size": "{size} кв. футов при запросе от {wanted}",
         "fit.handover_ok": "сдача в срок",
         "fit.handover_late": "сдача на {late} мес. позже срока",
+        "fit.handover_unknown": "дата сдачи неизвестна",
         "trust.evidence_page": "страница объявления открыта",
         "trust.evidence_card": "карточка в поисковой выдаче портала",
         "trust.evidence_lead": "лид из поисковика, страница не открывалась",
-        "trust.permit": "номер разрешения на рекламу указан",
+        "trust.not_dated": "дата просмотра не записана",
+        "trust.seen_future": "дата просмотра в будущем",
+        "trust.seen": "просмотрено {age} дн. назад",
+        "trust.seen_today": "просмотрено сегодня",
+        "trust.permit": "номер разрешения на рекламу зафиксирован",
         "trust.verified": "верифицировано порталом",
         "trust.unverified": "не верифицировано порталом",
-        "trust.seen": "активность проверена {age} дн. назад",
-        "trust.seen_today": "активность проверена сегодня",
+        "trust.unchecked": "нет ни разрешения, ни верификации портала",
         "trust.tier": "застройщик {tier}-го эшелона",
-        "trust.registered": "регистрация проекта подтверждена",
-        "trust.unregistered": "регистрация проекта не найдена",
+        "trust.tier_unknown": "история застройщика не оценена",
+        "trust.registered": "проект найден в реестре",
+        "trust.unregistered": "проект в реестре не найден",
+        "trust.registration_unchecked": "реестр не проверялся",
+        "terms.resale": "переуступка: график застройщика не отражает платежи покупателя",
         "terms.na": "без рассрочки от застройщика",
         "terms.missing": "не оценено: нет графика платежей или даты сдачи",
         "terms.scored": "приведённая стоимость графика — {pv} цены при ставке {rate} годовых; до сдачи вносится {before}%",
+        "terms.waiver": "регистрационный сбор {rate} оплачивает застройщик",
+        "flag.analyst": "проверка аналитика: {text}",
         "flag.unverified_lead": "непроверенный лид: страницу открыть не удалось, цена и наличие — по последним данным поисковика; до любых выводов открыть ссылку",
-        "flag.card_only": "объект виден карточкой в выдаче портала; его страница не открывалась, поэтому ссылка ведёт на эту выдачу",
         "flag.implausible_price": "цена {gap} к бенчмарку: до любых выводов подтвердить, что объект существует, площадь верна и это не приманка",
-        "flag.registration_not_found": "регистрация проекта или эскроу-счёт не найдены: не двигаться дальше, пока застройщик их не предоставит",
+        "flag.implausible_yield": "валовая доходность {gross} неправдоподобна: проверить ставку аренды и то, полная ли это цена",
+        "flag.registration_not_found": "проект искали в реестре и не нашли: не двигаться дальше, пока застройщик не предоставит регистрацию и эскроу-счёт",
+        "flag.overpriced": "цена {gap} к зарегистрированным сделкам: имеет смысл только при существенно меньшей цене",
+        "flag.thin_benchmark": "бенчмарк построен менее чем по пяти сделкам либо их число не записано: разницу считать ориентировочной",
+        "flag.from_price": "цена «от»: она относится к самому маленькому или наименее удачному юниту, запросить письменно цену конкретного юнита",
         "flag.completion_unknown": "статус готовности не указан: цены строящегося и готового жилья несопоставимы",
         "flag.size_missing": "площадь не указана: цену за кв. фут и выгодность оценить нельзя",
-        "flag.no_permit": "номер разрешения на рекламу не зафиксирован: до контакта отсканировать QR-код объявления или запросить номер у брокера",
         "flag.stale": "объявлению {days} дн.: возможно, продано — либо есть пространство для торга",
-        "flag.registration_unchecked": "регистрация проекта и эскроу-счёт ещё не проверены",
+        "flag.seen_in_future": "дата просмотра {seen} позже даты оценки: актуальность не засчитана",
+        "flag.registration_unchecked": "регистрация проекта и эскроу-счёт ещё не проверены: до проверки объект не попадает в шорт-лист",
         "flag.developer_unproven": "у застройщика короткая или проблемная история сдачи",
-        "flag.offplan_premium": "цена на {premium} выше готового жилья того же формата рядом: премия за стройку обычна, но здесь она велика",
+        "flag.offplan_premium": "цена на {premium} выше готового жилья того же формата рядом — больше обычной премии за строящееся",
+        "flag.register_overdue": "плановая дата завершения по реестру, {date}, прошла, а проект не сдан",
+        "flag.handover_passed": "заявленная сдача, {handover}, прошла, а объект всё ещё продаётся как строящийся",
+        "flag.handover_mismatch": "в рекламе сдача {advert}, в реестре — {register}: в расчётах дата из реестра",
+        "flag.handover_unknown": "дата сдачи неизвестна, срок из запроса проверить не удалось",
         "flag.late_handover": "сдача {handover} — на {late} мес. позже требуемого срока {wanted}",
-        "flag.tenanted": "объект с арендатором: освобождение зависит от договора аренды и срока уведомления",
-        "flag.costs_exceed_budget": "цена проходит, но с расходами на сделку итог {outlay}",
-        "flag.no_benchmark": "бенчмарк по сделкам не предоставлен: это только цена предложения",
-        "flag.thin_benchmark": "сделок в основе бенчмарка: {count}. Этого мало; расширить выборку или считать разницу ориентировочной",
-        "flag.projected_rent": "аренда — прогноз для непостроенного объекта, а не фактическая ставка",
-        "flag.not_dated": "не записана дата, когда объявление было активно",
+        "flag.inspection_stale": "готовность в реестре — по инспекции от {inspected}, ей больше трёх месяцев",
+        "flag.tenanted": "объект с арендатором: освобождение зависит от договора аренды и срока уведомления, для собственного проживания в шорт-лист не попадает",
+        "flag.emirate_missing": "эмират не указан: сборы рассчитать нельзя, в итоге только цена",
         "flag.cost_rates_unknown": "этот эмират не публикует тарифы: в итоге только цена, нужен письменный расчёт",
-        "flag.cost_rates_indicative": "этот эмират публикует тарифы лишь частично: расходы ориентировочные и без комиссии агентства, нужен письменный расчёт",
-        "flag.offplan_finance": "строящийся объект: банковское финансирование ограничено {cap} цены, расходы показаны без кредита",
-        "flag.ltv_over_cap": "запрошенный кредит {ltv} выше лимита Центробанка {cap} для такой покупки",
-        "flag.golden_visa_conditions": "Golden Visa по объекту в ипотеке или в стройке: официальные страницы расходятся в том, какая сумма должна быть оплачена — подтвердить в DLD или GDRFA",
+        "flag.cost_rates_partial": "этот эмират публикует только регистрационный сбор: комиссия агентства и регистрация ипотеки не включены, нужен письменный расчёт",
+        "flag.waiver_ignored": "отмена сбора указана для вторичной сделки: застройщик не может отменить сбор при перепродаже, сбор учтён полностью",
+        "flag.offplan_finance": "строящийся объект: банковское финансирование ограничено {cap} цены и до сдачи доступно редко, расходы показаны без кредита",
+        "flag.ltv_capped": "запрошенный кредит {ltv} выше лимита Центробанка {cap} для такой покупки: в расчётах {cap}",
+        "flag.non_resident_finance": "покупатель-нерезидент: банки обычно дают заметно меньше лимита Центробанка, до расчёта на кредит получить предодобрение",
+        "flag.visa_margin": "цена в пределах 5% от порога {threshold} для Golden Visa: порог считается по зарегистрированной стоимости, скидка при торге может лишить права на визу",
+        "flag.visa_benchmark_below": "по сопоставимым сделкам выходит около {implied} — ниже порога {threshold}: цена, возможно, выставлена под визу, а не по рынку",
+        "flag.visa_conditions": "Golden Visa по объекту в ипотеке или в стройке: официальные страницы расходятся в том, какая сумма должна быть оплачена — сначала подтвердить в земельном департаменте или миграционной службе эмирата",
+        "flag.transfer_seller_pays": "остров регистрирует ADGM, по правилам которого сбор 2% платит продавец: закрепить это в договоре",
+        "flag.transfer_split": "по умолчанию сбор 2% делится с продавцом поровну; здесь он показан целиком на покупателе, как часто пишут в договорах",
+        "flag.costs_exceed_budget": "цена проходит, но с расходами на сделку итог {outlay}",
+        "flag.no_permit": "номер разрешения на рекламу не зафиксирован: до контакта отсканировать QR-код объявления или запросить номер у брокера",
+        "flag.no_benchmark": "бенчмарк по сделкам не предоставлен: это только цена предложения",
+        "flag.projected_rent": "аренда — прогноз для непостроенного объекта, а не фактическая ставка",
+        "flag.low_turnover": "зарегистрированных сделок в здании за год: {sales}. Перепродажа может идти медленно",
+        "flag.card_only": "объект виден карточкой в выдаче портала; его страница не открывалась, поэтому в шорт-лист он не попадает, а ссылка ведёт на эту выдачу",
+        "flag.advertised_lower": "этот же объект размещён также за {price}: см. остальные ссылки",
         "reject.over_budget": "цена {spend} выше бюджета {budget}",
         "reject.over_budget_costs": "цена с расходами на сделку {spend} выше бюджета {budget}",
         "reject.under_budget": "цена {price} ниже минимума {minimum}",
         "reject.market": "объект «{completion}», запрос — «{market}»",
-        "reject.emirate": "эмират {emirate} вне запроса",
-        "reject.type": "тип объекта {type} вне запроса",
+        "reject.emirate": "{emirate} вне запроса",
+        "reject.type": "тип объекта «{type}» вне запроса",
         "reject.beds_low": "спален: {beds}, требуется не менее {wanted}",
         "reject.beds_high": "спален: {beds}, допустимо не более {wanted}",
         "reject.area": "вне районов, которыми ограничен запрос",
         "reject.excluded": "подпадает под исключение «{term}»",
+        "reject.handover": "сдача {handover} позже срока из запроса, {wanted}",
         "reject.golden_visa": "цена ниже порога {threshold} для Golden Visa",
         "cost.transfer_fee": "Регистрационный сбор, {rate} от цены",
         "cost.transfer_fee_waived": "Регистрационный сбор {rate} оплачивает застройщик: получить это письменно",
+        "cost.transfer_fee_seller": "Регистрационный сбор {rate}: по правилам ADGM платит продавец",
         "cost.registration_fee": "Сборы за регистрацию и титул",
         "cost.trustee_fee": "Услуги регистрационного трасти, включая НДС",
         "cost.agency_fee": "Комиссия агентства, {rate} плюс НДС",
@@ -175,40 +241,12 @@ TEXT: Dict[str, Dict[str, str]] = {
     },
 }
 
-MONEY_PARAMS = ("psf", "benchmark", "outlay", "spend", "budget", "price", "minimum", "threshold")
-SIGNED_PARAMS = ("gap", "premium")
-SHARE_PARAMS = ("net", "gross", "pv")
-RATE_PARAMS = ("rate", "cap", "ltv")
-
-
-def render(note: Note, lang: str = "en") -> str:
-    shown: Dict[str, Any] = {}
-    for key, value in note.params.items():
-        if key in MONEY_PARAMS:
-            shown[key] = aed(value, lang)
-        elif key in SIGNED_PARAMS:
-            shown[key] = pct(value, signed=True, lang=lang)
-        elif key in SHARE_PARAMS:
-            shown[key] = pct(value, lang=lang)
-        elif key in RATE_PARAMS:
-            rate = f"{value * 100:.4g}%"
-            shown[key] = rate.replace(".", ",") if lang == "ru" else rate
-        elif key == "basis":
-            shown[key] = f" ({value})" if value else ""
-        elif isinstance(value, float):
-            shown[key] = f"{value:,.0f}"
-        else:
-            shown[key] = value
-    return TEXT[lang][note.code].format(**shown)
-
-
 UI: Dict[str, Dict[str, str]] = {
     "en": {
         "title": "Property Shortlist",
         "subtitle": "United Arab Emirates",
         "prepared_for": "Prepared for",
         "as_of": "As of",
-        "brief": "Brief",
         "budget": "Budget",
         "budget_with_costs": "including acquisition costs",
         "market": "Market",
@@ -216,7 +254,7 @@ UI: Dict[str, Dict[str, str]] = {
         "where": "Where",
         "anywhere": "any emirate",
         "received": "Listings reviewed",
-        "unique": "Unique units",
+        "unique": "Distinct offers",
         "ranked": "Passed the brief",
         "shortlisted": "Shortlisted",
         "rejected": "Rejected",
@@ -226,17 +264,27 @@ UI: Dict[str, Dict[str, str]] = {
         "gross_yield": "Gross yield",
         "net_yield": "Net yield",
         "outlay": "Total outlay",
-        "upfront_cash": "Own funds needed",
-        "costs_total": "costs",
-        "outlay_total": "price plus costs",
-        "costs_incomplete": "no cost table for this emirate: the figures above are incomplete",
+        "own_funds": "Own funds needed",
+        "cash_at_booking": "Due at booking, with fees",
+        "sales_12m": "Sales in the building, 12 months",
         "score": "Score",
-        "confidence": "Evidence",
+        "completeness": "Data completeness",
         "beds": "bed",
         "studio": "Studio",
         "sqft": "sqft",
         "handover": "Handover",
         "developer": "Developer",
+        "agent": "Agent",
+        "seen": "Seen",
+        "permit": "Permit",
+        "register": "Project register",
+        "register_no": "No.",
+        "register_built": "built",
+        "register_inspected": "inspected",
+        "register_due": "planned completion",
+        "escrow": "escrow",
+        "notes": "Analyst's notes",
+        "sources": "Sources",
         "open_page": "Open listing",
         "open_card": "Open the search page showing this card",
         "open_lead": "Open the unverified lead",
@@ -247,35 +295,28 @@ UI: Dict[str, Dict[str, str]] = {
         "rejected_title": "Rejected against the brief",
         "method": "Method",
         "method_text": (
-            "Each unit is scored from 0 to 100 on value (asking price per sqft against a sold-price benchmark), "
-            "yield, fit to the brief, trust (permit, verification, recency, developer and registration for off-plan) "
-            "and payment terms. A criterion with no data counts as a neutral 50 and lowers the evidence figure; "
-            "offers with too little evidence are listed after the rated ones, whatever their score. "
-            "Asking prices are not transaction prices. Costs are estimates from published fee schedules as of {rates_as_of}; "
-            "confirm every figure against official sources before committing funds."
+            "Each offer is scored from 0 to 100 on value (asking price per sqft against registered sales), yield, "
+            "fit to the brief, trust (evidence level, how recently it was seen, permit or portal verification, and for "
+            "off-plan the developer's record and the project's registration) and payment terms. A criterion with no "
+            "data counts as a neutral 50 and lowers data completeness; one resting on few rows or an estimate counts "
+            "for half. Offers below 60% completeness are listed after the rated ones whatever their score. Only an "
+            "offer whose own page was opened can be shortlisted. Asking prices are not transaction prices. Costs are "
+            "estimates from fee schedules published as of {rates_as_of}; they leave out lender valuation and "
+            "arrangement fees, developer no-objection and admin charges and, outside Dubai and Abu Dhabi, agency "
+            "commission and mortgage registration. Confirm every figure against official sources before committing "
+            "funds; title, contract and loan approval are for the conveyancer and the bank."
         ),
         "weights": "Weights",
         "unknown": "n/a",
         "none_ranked": "No listing passed the brief.",
+        "costs_total": "costs",
+        "outlay_total": "price plus costs",
+        "own_funds_total": "own funds needed",
         "verdict.shortlist": "Shortlist",
         "verdict.consider": "Consider",
-        "verdict.verify_first": "Verify first",
         "verdict.pass": "Pass",
         "verdict.needs_data": "Needs data",
-        "emirate.dubai": "Dubai",
-        "emirate.abu_dhabi": "Abu Dhabi",
-        "emirate.sharjah": "Sharjah",
-        "emirate.ras_al_khaimah": "Ras Al Khaimah",
-        "emirate.ajman": "Ajman",
-        "emirate.umm_al_quwain": "Umm Al Quwain",
-        "emirate.fujairah": "Fujairah",
-        "type.apartment": "apartment",
-        "type.villa": "villa",
-        "type.townhouse": "townhouse",
-        "type.penthouse": "penthouse",
-        "type.duplex": "duplex",
-        "type.plot": "plot",
-        "type.office": "office",
+        "verdict.verify_first": "Verify first",
         "criterion.value": "Value",
         "criterion.yield": "Yield",
         "criterion.fit": "Fit",
@@ -292,13 +333,26 @@ UI: Dict[str, Dict[str, str]] = {
         "purpose.end_use": "own use",
         "purpose.golden_visa": "Golden Visa",
         "purpose.balanced": "balanced",
+        "emirate.dubai": "Dubai",
+        "emirate.abu_dhabi": "Abu Dhabi",
+        "emirate.sharjah": "Sharjah",
+        "emirate.ras_al_khaimah": "Ras Al Khaimah",
+        "emirate.ajman": "Ajman",
+        "emirate.umm_al_quwain": "Umm Al Quwain",
+        "emirate.fujairah": "Fujairah",
+        "type.apartment": "apartment",
+        "type.villa": "villa",
+        "type.townhouse": "townhouse",
+        "type.penthouse": "penthouse",
+        "type.duplex": "duplex",
+        "type.plot": "plot",
+        "type.office": "office",
     },
     "ru": {
         "title": "Подборка объектов",
         "subtitle": "Объединённые Арабские Эмираты",
         "prepared_for": "Клиент:",
         "as_of": "На дату",
-        "brief": "Запрос",
         "budget": "Бюджет",
         "budget_with_costs": "с учётом расходов на сделку",
         "market": "Рынок",
@@ -306,7 +360,7 @@ UI: Dict[str, Dict[str, str]] = {
         "where": "Где",
         "anywhere": "любой эмират",
         "received": "Рассмотрено объявлений",
-        "unique": "Уникальных объектов",
+        "unique": "Разных объектов",
         "ranked": "Прошли по запросу",
         "shortlisted": "В шорт-листе",
         "rejected": "Отклонено",
@@ -316,17 +370,27 @@ UI: Dict[str, Dict[str, str]] = {
         "gross_yield": "Валовая доходность",
         "net_yield": "Чистая доходность",
         "outlay": "Итого к оплате",
-        "upfront_cash": "Нужно собственных средств",
-        "costs_total": "расходы",
-        "outlay_total": "цена с расходами",
-        "costs_incomplete": "для этого эмирата нет таблицы сборов: цифры выше неполные",
+        "own_funds": "Нужно собственных средств",
+        "cash_at_booking": "При бронировании, с расходами",
+        "sales_12m": "Сделок в здании за 12 мес.",
         "score": "Балл",
-        "confidence": "Доказательность",
+        "completeness": "Полнота данных",
         "beds": "спал.",
         "studio": "Студия",
         "sqft": "кв. футов",
         "handover": "Сдача",
         "developer": "Застройщик",
+        "agent": "Агент",
+        "seen": "Просмотрено",
+        "permit": "Разрешение",
+        "register": "Реестр проектов",
+        "register_no": "№",
+        "register_built": "готовность",
+        "register_inspected": "инспекция",
+        "register_due": "плановое завершение",
+        "escrow": "эскроу",
+        "notes": "Заметки аналитика",
+        "sources": "Источники",
         "open_page": "Открыть объявление",
         "open_card": "Открыть выдачу с этой карточкой",
         "open_lead": "Открыть непроверенный лид",
@@ -337,35 +401,28 @@ UI: Dict[str, Dict[str, str]] = {
         "rejected_title": "Отклонено по условиям запроса",
         "method": "Методика",
         "method_text": (
-            "Каждый объект оценивается от 0 до 100 по выгодности (цена предложения за кв. фут к бенчмарку цен сделок), "
-            "доходности, соответствию запросу, надёжности (разрешение, верификация, актуальность, для строящихся — "
-            "застройщик и регистрация проекта) и условиям оплаты. Критерий без данных считается нейтральным (50) "
-            "и снижает показатель доказательности; объекты с недостаточной доказательностью идут после оценённых, "
-            "каким бы ни был их балл. Цены предложения — не цены сделок. Расходы — оценка по опубликованным "
-            "тарифам на {rates_as_of}; до перевода средств каждую цифру следует подтвердить по официальным источникам."
+            "Каждый объект оценивается от 0 до 100 по выгодности (цена предложения за кв. фут к зарегистрированным "
+            "сделкам), доходности, соответствию запросу, надёжности (уровень проверки, давность просмотра, разрешение "
+            "или верификация портала, для строящихся — история застройщика и регистрация проекта) и условиям оплаты. "
+            "Критерий без данных считается нейтральным (50) и снижает полноту данных; критерий, опирающийся на малое "
+            "число строк или на оценку, засчитывается наполовину. Объекты с полнотой ниже 60% идут после оценённых, "
+            "каким бы ни был их балл. В шорт-лист попадает только объект, страница которого была открыта. Цены "
+            "предложения — не цены сделок. Расходы — оценка по тарифам, опубликованным на {rates_as_of}; в них нет "
+            "банковских комиссий за оценку и выдачу кредита, сборов застройщика за согласование и оформление, а вне "
+            "Дубая и Абу-Даби — комиссии агентства и регистрации ипотеки. До перевода средств каждую цифру следует "
+            "подтвердить по официальным источникам; титул, договор и одобрение кредита — зона юриста и банка."
         ),
         "weights": "Веса",
         "unknown": "н/д",
         "none_ranked": "Ни одно объявление не прошло по условиям запроса.",
+        "costs_total": "расходы",
+        "outlay_total": "цена с расходами",
+        "own_funds_total": "нужно собственных средств",
         "verdict.shortlist": "Шорт-лист",
         "verdict.consider": "Рассмотреть",
-        "verdict.verify_first": "Сначала проверить",
         "verdict.pass": "Пропустить",
         "verdict.needs_data": "Нужны данные",
-        "emirate.dubai": "Дубай",
-        "emirate.abu_dhabi": "Абу-Даби",
-        "emirate.sharjah": "Шарджа",
-        "emirate.ras_al_khaimah": "Рас-эль-Хайма",
-        "emirate.ajman": "Аджман",
-        "emirate.umm_al_quwain": "Умм-эль-Кайвайн",
-        "emirate.fujairah": "Фуджейра",
-        "type.apartment": "квартира",
-        "type.villa": "вилла",
-        "type.townhouse": "таунхаус",
-        "type.penthouse": "пентхаус",
-        "type.duplex": "дуплекс",
-        "type.plot": "участок",
-        "type.office": "офис",
+        "verdict.verify_first": "Сначала проверить",
         "criterion.value": "Выгодность",
         "criterion.yield": "Доходность",
         "criterion.fit": "Соответствие",
@@ -382,5 +439,51 @@ UI: Dict[str, Dict[str, str]] = {
         "purpose.end_use": "для себя",
         "purpose.golden_visa": "Golden Visa",
         "purpose.balanced": "сбалансированная",
+        "emirate.dubai": "Дубай",
+        "emirate.abu_dhabi": "Абу-Даби",
+        "emirate.sharjah": "Шарджа",
+        "emirate.ras_al_khaimah": "Рас-эль-Хайма",
+        "emirate.ajman": "Аджман",
+        "emirate.umm_al_quwain": "Умм-эль-Кайвайн",
+        "emirate.fujairah": "Фуджейра",
+        "type.apartment": "квартира",
+        "type.villa": "вилла",
+        "type.townhouse": "таунхаус",
+        "type.penthouse": "пентхаус",
+        "type.duplex": "дуплекс",
+        "type.plot": "участок",
+        "type.office": "офис",
     },
 }
+
+MONEY = ("psf", "benchmark", "outlay", "spend", "budget", "price", "minimum", "threshold", "implied")
+SIGNED = ("gap", "premium")
+SHARES = ("net", "gross", "pv")
+RATES = ("rate", "cap", "ltv")
+DAYS = ("seen", "inspected")
+LABELLED = {"completion": "market", "market": "market", "emirate": "emirate", "type": "type"}
+
+
+def render(note: Note, lang: str = "en") -> str:
+    labels = UI[lang]
+    shown: Dict[str, Any] = {}
+    for key, value in note.params.items():
+        if key in MONEY:
+            shown[key] = aed(value, lang)
+        elif key in SIGNED:
+            shown[key] = pct(value, signed=True, lang=lang)
+        elif key in SHARES:
+            shown[key] = pct(value, lang=lang)
+        elif key in RATES:
+            shown[key] = rate(value, lang)
+        elif key in DAYS:
+            shown[key] = long_date(date.fromisoformat(value), lang)
+        elif key in LABELLED:
+            shown[key] = labels.get(f"{LABELLED[key]}.{value}", str(value).replace("_", " "))
+        elif key == "basis":
+            shown[key] = f" ({value})" if value else ""
+        elif isinstance(value, float):
+            shown[key] = grouped(value, lang)
+        else:
+            shown[key] = value
+    return TEXT[lang][note.code].format(**shown)

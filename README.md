@@ -26,7 +26,7 @@ This repository contains a comprehensive **Development Workflow Protocol** that 
 
 A buy-side sourcing agent for UAE property, with a deterministic engine behind it.
 
-- **Agent**: `agents/real-estate/real-estate-uae-property-scout.md`, also installed for Claude Code at `.claude/agents/uae-property-scout.md`. Give it a brief (budget, off-plan or ready, emirate and areas, type, bedrooms, purpose) in English or Russian. It returns a ranked shortlist of live offers, each priced against registered sales, costed with every fee, and marked with what could not be verified.
+- **Agent**: `agents/real-estate/real-estate-uae-property-scout.md`, also installed for Claude Code at `.claude/agents/uae-property-scout.md`. Give it a brief (budget, off-plan or ready, emirate and areas, type, bedrooms, purpose) in English or Russian. It returns a ranked shortlist of live offers, each priced against registered sales, costed with the fees each emirate publishes, and marked with what could not be verified.
 - **Engine**: `property_scout/`, a stdlib-only package the agent calls so that costs, yields, scores and rankings are reproducible.
 
 ```bash
@@ -34,7 +34,8 @@ pip install -e ".[dev]"
 property-scout template brief > brief.json
 property-scout template listings > listings.json
 property-scout plan --brief brief.json
-property-scout costs --price 2000000 --emirate dubai --sale-type resale
+property-scout comps --rows sold_rows.json --size 760 --months 12 --completion ready
+property-scout costs --price 2000000 --emirate dubai --sale-type resale --financing mortgage --ltv 0.75 --first-home
 property-scout score --brief brief.json --listings listings.json --format html --lang ru --out shortlist.html
 ```
 

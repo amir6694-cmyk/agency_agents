@@ -1,4 +1,4 @@
-"""Derived figures for one listing: price per sqft, benchmark gap, yields, payment-plan value."""
+"""Derived figures for one listing: benchmark gap, yields, payment-plan value."""
 
 from dataclasses import dataclass
 from datetime import date
@@ -12,6 +12,7 @@ from .text import months_until
 class PlanValue:
     present_value_ratio: float
     deferral_benefit: float
+    booking_pct: float
     paid_before_handover_pct: float
     months_to_handover: int
 
@@ -38,10 +39,13 @@ def net_yield(listing: Listing, total_cost: float, running_cost_ratio: float) ->
     return (listing.annual_rent_aed - service_charges - running_costs) / total_cost
 
 
-def _months_to_handover(listing: Listing, today: date) -> Optional[int]:
-    """Zero for a finished unit; unknown for an unbuilt one whose plan defers money to an undated handover."""
-    if listing.handover:
-        return max(months_until(listing.handover, today), 0)
+def months_to_handover(listing: Listing, today: date) -> Optional[int]:
+    """Counted to the start of the stated period, so a vague date cannot flatter a plan.
+
+    Zero for a finished unit; unknown for an unbuilt one whose plan defers money to an undated handover.
+    """
+    if listing.scheduled_handover:
+        return max(months_until(listing.scheduled_handover, today, start=True), 0)
     deferred = any(listing.payment_plan.get(stage) for stage in ("during_construction", "on_handover", "post_handover"))
     if deferred and listing.completion != "ready":
         return None
@@ -53,7 +57,7 @@ def plan_cashflows(listing: Listing, today: date) -> Optional[List[Tuple[int, fl
     plan = listing.payment_plan
     if not plan:
         return None
-    months = _months_to_handover(listing, today)
+    months = months_to_handover(listing, today)
     if months is None:
         return None
     flows: List[Tuple[int, float]] = []
@@ -84,6 +88,7 @@ def plan_value(listing: Listing, today: date, annual_rate: float) -> Optional[Pl
     return PlanValue(
         present_value_ratio=present,
         deferral_benefit=1 - present,
+        booking_pct=plan.get("on_booking", 0),
         paid_before_handover_pct=plan.get("on_booking", 0) + plan.get("during_construction", 0),
-        months_to_handover=_months_to_handover(listing, today) or 0,
+        months_to_handover=months_to_handover(listing, today) or 0,
     )
