@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from property_scout.fields import MAX_TEXT, Check, InputError
+from property_scout.fields import LONG_TEXT, MAX_NUMBER, MAX_TEXT, Check, InputError
 
 
 class Refused(InputError):
@@ -24,7 +24,10 @@ class TestText:
         with pytest.raises(Refused, match="row 3: title must be text"):
             check.text("title", value)
 
-    @pytest.mark.parametrize("value", ["two\nlines", "tab\there", "nul\x00", "line separator"])
+    @pytest.mark.parametrize(
+        "value",
+        ["two\nlines", "tab\there", "nul\x00", "line\u2028separator", "next\x85line", "csi\x9b31m", "\u202egnp.exe", "isolate\u2066x", "half\ud83c"],
+    )
     def test_refuses_control_characters(self, check, value):
         with pytest.raises(Refused, match="one line"):
             check.text("title", value)
@@ -33,6 +36,11 @@ class TestText:
         assert check.text("notes", "x" * MAX_TEXT)
         with pytest.raises(Refused, match="longer"):
             check.text("notes", "x" * (MAX_TEXT + 1))
+
+    def test_a_field_may_be_given_more_room(self, check):
+        assert check.text("notes", "x" * LONG_TEXT, LONG_TEXT)
+        with pytest.raises(Refused, match=f"longer than {LONG_TEXT}"):
+            check.text("notes", "x" * (LONG_TEXT + 1), LONG_TEXT)
 
 
 class TestNumber:
@@ -50,6 +58,12 @@ class TestNumber:
     def test_refuses_values_that_are_not_finite(self, check, value):
         with pytest.raises(Refused):
             check.number("price", value)
+
+    @pytest.mark.parametrize("value", [MAX_NUMBER * 10, 10 ** 400, -(10 ** 400)])
+    def test_refuses_values_too_large_to_be_money_or_area(self, check, value):
+        with pytest.raises(Refused, match="must be a number"):
+            check.number("price", value)
+        assert check.number("price", MAX_NUMBER) == MAX_NUMBER
 
     def test_lower_bound_is_exclusive_unless_opened(self, check):
         with pytest.raises(Refused, match="> 0"):
@@ -122,9 +136,14 @@ class TestDay:
     def test_accepts_a_date_and_the_date_part_of_a_timestamp(self, check):
         assert check.day("seen", "2026-11-19") == "2026-11-19"
         assert check.day("seen", "2026-11-19T08:30:00Z") == "2026-11-19"
+        assert check.day("seen", "2026-11-19 08:30") == "2026-11-19"
+        assert check.day("seen", "2026-11-19T08:30:00.250+04:00") == "2026-11-19"
         assert check.day("seen", None) is None and check.day("seen", "") is None
 
-    @pytest.mark.parametrize("value", ["19/11/2026", "2026-02-30", "2026-11", "yesterday", 20261119, "2026-11-19x"])
+    @pytest.mark.parametrize(
+        "value",
+        ["19/11/2026", "2026-02-30", "2026-11", "yesterday", 20261119, "2026-11-19x", "2026-11-19 or so", "2026-11-19Tnoon", "2026-11-19\n"],
+    )
     def test_refuses_anything_else(self, check, value):
         with pytest.raises(Refused, match="YYYY-MM-DD"):
             check.day("seen", value)

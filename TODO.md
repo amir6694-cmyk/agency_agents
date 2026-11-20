@@ -1,6 +1,6 @@
 # Agency Agents Project To-Do List
 
-Last Updated: 2026-11-20
+Last Updated: 2026-11-21
 
 ## In Progress
 - No tasks currently in progress
@@ -9,6 +9,14 @@ Last Updated: 2026-11-20
 - No pending tasks
 
 ## Recent Updates
+- [x] Third revision of property_scout after a second round of independent review and live trials
+  - Completed: 2026-11-21
+  - Branch: claude/practical-gauss-1au7f9
+  - Fixed: fifty reproduced review findings, the common thread being that an omitted field improved the outcome
+  - Changed: units are folded before the brief is applied; untested limits hold an offer at consider; lapsed register dates are not delivery dates; first-sale prices need corroboration
+  - Changed: plan emits the portal's full community names, register-copy pages and bedroom-level benchmark pages; the definition documents address structure, paging and triage found in the trials
+  - Verified: every reviewer reproduction re-run; awk recomputation; mutation run
+
 - [x] Revise the property_scout engine and the UAE Property Scout definition after trials and independent review
   - Completed: 2026-11-20
   - Branch: claude/practical-gauss-1au7f9

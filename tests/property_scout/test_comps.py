@@ -63,8 +63,14 @@ class TestSummarise:
         assert summary.median_psf == pytest.approx(2000)
 
     def test_counts_incomplete_rows(self, today):
-        summary = summarise([row(1_500_000, 750), {"price_aed": 1_000_000}, row(0, 700), row(1_000_000, None)], today)
-        assert summary.used == 1 and summary.dropped["incomplete"] == 3
+        rows = [row(1_500_000, 750), {"price_aed": 1_000_000}, row(0, 700), row(1_000_000, None), row(0.5, 700), row(1_000_000, 0.2)]
+        summary = summarise(rows, today)
+        assert summary.used == 1 and summary.dropped["incomplete"] == 5
+
+    def test_a_row_dated_after_the_valuation_date_is_dropped(self, today):
+        rows = [row(1_500_000, 750, "2026-10-30"), row(9_000_000, 750, "2027-07-01"), row(1_500_000, 750, today.isoformat())]
+        summary = summarise(rows, today, months=12)
+        assert summary.used == 2 and summary.dropped["date"] == 1 and summary.last_date == today.isoformat()
 
     def test_few_comps_are_flagged_thin(self, today):
         assert summarise([row(1_500_000, 750)] * (MIN_COMPS - 1), today).thin
@@ -114,6 +120,10 @@ class TestConcentration:
         rows = [row(1_500_000, 750, project="A")] * 2 + [row(1_500_000, 750)] * 4
         summary = summarise(rows, today)
         assert summary.largest_project_share == pytest.approx(2 / 6) and not summary.concentrated
+
+    def test_a_benchmark_from_one_building_is_not_called_concentrated(self, today):
+        summary = summarise([row(1_500_000, 750, project="Tower A")] * 6, today)
+        assert summary.largest_project_share == 1 and summary.projects == 1 and not summary.concentrated
 
     def test_unknown_when_rows_do_not_name_their_project(self, today):
         assert summarise([row(1_500_000, 750)] * 6, today).largest_project_share is None

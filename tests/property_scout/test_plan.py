@@ -2,7 +2,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from property_scout.brief import EMIRATES, PROPERTY_TYPES
 from property_scout.costs import GOLDEN_VISA_MIN_AED
-from property_scout.plan import EMIRATE_SLUG, MAX_BED_VARIANTS, NEW_PROJECT_TYPE_ID, PF, TYPE_SLUG, search_plan
+from property_scout.plan import EMIRATE_SLUG, MAX_BED_VARIANTS, NEW_PROJECT_TYPE_ID, PF, REGISTER_COPY, TYPE_SLUG, search_plan
 
 
 def steps(plan, name):
@@ -27,6 +27,14 @@ class TestListingUrls:
         plan = search_plan(brief)
         assert steps(plan, "listings")[0]["url"] == f"{PF}/buy/dubai/studio-apartments-for-sale-jumeirah-village-circle.html?pt=600000&cs=completed"
         assert steps(plan, "note") == []
+
+    def test_short_area_names_become_the_portals_addresses(self, make_brief):
+        brief = make_brief(areas=["JLT", "Marina", "Dubai Marina", "Jumeirah Village Circle (JVC)"], property_types=["apartment"], bedrooms_min=1, bedrooms_max=1)
+        plan = search_plan(brief)
+        slugs = ["jumeirah-lake-towers", "dubai-marina", "jumeirah-village-circle"]
+        assert [s["url"].split("-for-sale-")[1].split(".html")[0] for s in steps(plan, "listings")] == slugs
+        assert [s["url"].rsplit("/", 1)[1] for s in steps(plan, "sold_benchmark")] == [f"1-bedroom-apartments-{slug}" for slug in slugs]
+        assert "not found" in steps(plan, "listings")[0]["check"]
 
     def test_one_url_per_bedroom_count(self, make_brief):
         brief = make_brief(areas=["Dubai Marina"], property_types=["apartment"], bedrooms_min=1, bedrooms_max=2)
@@ -69,11 +77,13 @@ class TestWhatThePlanCannotExpress:
         assert paths == ["/en/buy/dubai/properties-for-sale.html", "/en/buy/abu-dhabi/properties-for-sale.html"]
         assert "one brief per emirate" in remarks(plan)
 
-    def test_an_area_in_another_script_is_reported_not_searched(self, make_brief):
-        plan = search_plan(make_brief(areas=["Дубай Марина", "Business Bay"]))
-        found = [s["url"] for s in steps(plan, "listings")]
-        assert len(found) == 1 and "business-bay" in found[0]
-        assert "English name" in remarks(plan)
+    def test_what_no_address_can_filter_is_named(self, make_brief):
+        brief = make_brief(market="offplan", size_min_sqft=900, handover_by="2028-Q4", sale_type="primary", must_have=["sea view"])
+        said = remarks(search_plan(brief))
+        for expected in ("cannot filter by size", "handover date", "2028-Q4", "sale type", "'primary'", "must-haves"):
+            assert expected in said, expected
+        ready = remarks(search_plan(make_brief(market="ready", size_min_sqft=900, handover_by="2028-Q4")))
+        assert "cannot filter by size" not in ready and "handover date" not in ready
 
     def test_a_type_the_portal_cannot_filter_widens_the_search(self, make_brief):
         plan = search_plan(make_brief(property_types=["apartment", "duplex"]))
@@ -106,9 +116,30 @@ class TestOtherSteps:
         assert parts.path == "/en/new-projects/lp/ras-al-khaimah/al-marjan-island"
         assert parse_qs(parts.query) == {"pf": ["1000000"], "pt": ["2500000"], "t": [str(NEW_PROJECT_TYPE_ID["villa"])], "cs": ["off_plan"]}
 
-    def test_new_projects_are_not_narrowed_to_the_first_of_several_types(self, make_brief):
+    def test_new_projects_get_one_page_per_type_the_index_can_filter(self, make_brief):
         brief = make_brief(market="offplan", property_types=["villa", "townhouse"])
-        assert "t" not in parse_qs(urlsplit(steps(search_plan(brief), "new_projects")[0]["url"]).query)
+        pages = [parse_qs(urlsplit(s["url"]).query)["t"] for s in steps(search_plan(brief), "new_projects")]
+        assert pages == [[str(NEW_PROJECT_TYPE_ID["villa"])], [str(NEW_PROJECT_TYPE_ID["townhouse"])]]
+
+    def test_a_type_the_index_cannot_filter_means_the_unfiltered_page(self, make_brief):
+        found = steps(search_plan(make_brief(market="offplan", property_types=["villa", "duplex"])), "new_projects")
+        assert len(found) == 1 and "t" not in parse_qs(urlsplit(found[0]["url"]).query)
+
+    def test_off_plan_briefs_in_dubai_get_the_register_copy_for_each_area(self, make_brief):
+        plan = search_plan(make_brief(market="offplan", areas=["JVC", "Arjan"]))
+        assert [s["url"] for s in steps(plan, "register")] == [f"{REGISTER_COPY}/jumeirah-village-circle", f"{REGISTER_COPY}/arjan"]
+        assert "not the register" in steps(plan, "register")[0]["check"]
+        assert steps(search_plan(make_brief(market="ready", areas=["JVC"])), "register") == []
+        assert steps(search_plan(make_brief(market="offplan", emirates=["abu_dhabi"], areas=["Yas Island"])), "register") == []
+
+    def test_benchmarks_carry_the_bedroom_count_only_for_apartments(self, make_brief):
+        villas = search_plan(make_brief(areas=["Dubai Hills"], property_types=["villa"], bedrooms_min=4, bedrooms_max=4))
+        mixed = search_plan(make_brief(areas=["Dubai Hills"], bedrooms_min=1, bedrooms_max=2))
+        flats = search_plan(make_brief(areas=["Dubai Hills"], property_types=["apartment"], bedrooms_min=0, bedrooms_max=1))
+        assert [s["url"] for s in steps(villas, "sold_benchmark")] == [f"{PF}/transactions/sold/dubai/dubai-hills-estate"]
+        assert [s["url"] for s in steps(mixed, "rent_benchmark")] == [f"{PF}/transactions/rented/dubai/dubai-hills-estate"]
+        assert [s["url"].rsplit("/", 1)[1] for s in steps(flats, "sold_benchmark")] == ["studio-apartments-dubai-hills-estate", "1-bedroom-apartments-dubai-hills-estate"]
+        assert "?page=2" in steps(flats, "sold_benchmark")[0]["check"]
 
     def test_no_step_pages_through_filtered_results(self, make_brief):
         for step in search_plan(make_brief(areas=["Dubai Marina"], bedrooms_min=1)):
@@ -120,6 +151,7 @@ class TestOtherSteps:
             f"{PF}/transactions/sold/dubai/dubai-marina",
             f"{PF}/transactions/sold/dubai/business-bay",
         ]
+        assert "location line" in steps(plan, "sold_benchmark")[0]["check"]
         assert steps(plan, "rent_benchmark")[0]["url"] == f"{PF}/transactions/rented/dubai/dubai-marina"
         assert "renewals" in steps(plan, "rent_benchmark")[0]["check"]
 
@@ -132,6 +164,8 @@ class TestOtherSteps:
         plan = search_plan(make_brief(areas=["Dubai Marina"], bedrooms_min=1, market="offplan"))
         lead = steps(plan, "leads")[0]
         assert "1 bedroom" in lead["query"] and "off-plan" in lead["query"] and "Dubai Marina" in lead["query"]
+        villas = steps(search_plan(make_brief(property_types=["villa"], bedrooms_min=4)), "leads")[0]["query"]
+        assert "4 bedroom villa" in villas
         assert "lead" in lead["check"]
         assert steps(plan, "launch_news")
 

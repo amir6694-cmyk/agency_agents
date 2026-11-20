@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -54,7 +55,8 @@ class TestScore:
         brief, listings, _ = files
         data = json.loads(output("score", "--brief", str(brief), "--listings", str(listings), "--today", "2026-11-20").out)
         assert data["as_of"] == "2026-11-20"
-        assert data["counts"] == {"received": 2, "unique": 2, "ranked": 2, "shortlisted": 2, "rejected": 0}
+        assert data["counts"] == {"received": 2, "unique": 2, "ranked": 2, "shortlisted": 1, "rejected": 0}
+        assert [row["verdict"] for row in data["ranked"]] == ["shortlist", "consider"]
         assert {row["url"] for row in data["ranked"]} == {READY_EXAMPLE["url"], OFFPLAN_EXAMPLE["url"]}
 
     def test_accepts_an_object_wrapping_the_listings(self, files, output):
@@ -91,6 +93,38 @@ class TestScore:
         listings.write_text(json.dumps([{**READY_EXAMPLE, "price_aed": "1,850,000"}]))
         assert "price_aed must be a number" in output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
 
+    def test_every_bad_listing_is_reported_in_one_pass(self, files, output):
+        brief, listings, _ = files
+        listings.write_text(json.dumps([{**READY_EXAMPLE, "bedrooms": "one"}, READY_EXAMPLE, {**OFFPLAN_EXAMPLE, "handover": "soon"}]))
+        err = output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+        assert err.splitlines()[0].startswith("error: listing 1:") and err.splitlines()[1].startswith("error: listing 3:")
+        assert len(err.splitlines()) == 2
+
+    def test_a_field_written_twice_is_refused_not_silently_overwritten(self, files, output):
+        brief, listings, _ = files
+        listings.write_text('[{"url": "https://x.example/1", "price_aed": 1850000, "evidence": "lead", "price_aed": 185000, "evidence": "page"}]')
+        err = output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+        assert "appears twice" in err and "evidence, price_aed" in err
+
+    def test_absurd_input_ends_in_an_error_line_not_a_traceback(self, files, output):
+        brief, listings, _ = files
+        listings.write_text("[" * 100_000 + "]" * 100_000)
+        assert "nested too deeply" in output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+        listings.write_text('[{"url": "https://x.example/1", "evidence": "page", "price_aed": 1' + "0" * 400 + "}]")
+        assert "price_aed must be a number" in output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+
+    def test_a_report_that_cannot_be_written_leaves_the_earlier_one_intact(self, files, output, monkeypatch):
+        brief, listings, tmp_path = files
+        out = tmp_path / "shortlist.html"
+        out.write_text("the earlier report")
+
+        def refuse(source, target):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", refuse)
+        assert "disk full" in output("score", "--brief", str(brief), "--listings", str(listings), "--format", "html", "--out", str(out), code=2).err
+        assert out.read_text() == "the earlier report"
+
     def test_listings_must_be_a_list(self, files, output):
         brief, listings, _ = files
         listings.write_text(json.dumps({"items": []}))
@@ -115,7 +149,8 @@ class TestScore:
 class TestCosts:
     def test_text_and_json_agree(self, output):
         data = json.loads(output(*COSTS, "--json").out)
-        assert data["total_outlay_aed"] == pytest.approx(2_000_000 + data["total_costs_aed"])
+        assert data["total_outlay_aed"] == 2_000_000 + data["total_costs_aed"]
+        assert all(isinstance(item["amount_aed"], int) for item in data["items"])
         assert data["own_funds_aed"] == data["total_outlay_aed"] and data["loan_aed"] == 0 and data["notes"] == []
         assert f"{data['total_outlay_aed']:,.0f}" in output(*COSTS).out
 
@@ -142,7 +177,14 @@ class TestCosts:
         printed = output("costs", "--price", "900000", "--emirate", "ajman", "--lang", "ru").out
         assert "\n! " in printed and "AED" in printed
 
-    @pytest.mark.parametrize("option, value", [("--price", "0"), ("--price", "-5"), ("--price", "nan"), ("--price", "2m"), ("--ltv", "75"), ("--ltv", "1"), ("--ltv", "0")])
+    def test_a_loan_ratio_without_a_mortgage_is_refused(self, output):
+        assert "--ltv needs --financing mortgage" in output(*COSTS, "--ltv", "0.75", code=2).err
+
+    @pytest.mark.parametrize(
+        "option, value",
+        [("--price", "0"), ("--price", "-5"), ("--price", "nan"), ("--price", "inf"), ("--price", "2m"), ("--price", "0.004"), ("--price", "1e13"),
+         ("--ltv", "75"), ("--ltv", "1"), ("--ltv", "0"), ("--ltv", "nan"), ("--ltv", "half")],
+    )
     def test_refuses_figures_that_make_no_sense(self, capsys, option, value):
         args = [arg for arg in COSTS if arg not in ("--price", "2000000")] if option == "--price" else list(COSTS)
         with pytest.raises(SystemExit):
@@ -168,6 +210,25 @@ class TestOtherCommands:
         assert (data["first_date"], data["last_date"]) == ("2026-10-01", "2026-11-02")
         assert data["thin"] and data["largest_project_share"] == pytest.approx(2 / 3)
         assert len(data["notes"]) == 2 and str(MIN_COMPS) in data["notes"][0]
+
+    def test_comps_looks_back_twelve_months_unless_told_otherwise(self, tmp_path, output):
+        rows = tmp_path / "rows.json"
+        rows.write_text(json.dumps([{"price_aed": 1_500_000, "size_sqft": 750, "date": "2026-01-15", "project": "A"}]))
+        assert json.loads(output("comps", "--rows", str(rows), "--today", "2026-11-19").out)["used"] == 1
+        short = json.loads(output("comps", "--rows", str(rows), "--today", "2026-11-19", "--months", "3").out)
+        assert short["used"] == 0 and short["dropped"]["date"] == 1
+
+    @pytest.mark.parametrize("months", ["0", "601", "two", "\u00b2", "-3"])
+    def test_comps_refuses_a_window_that_makes_no_sense(self, tmp_path, capsys, months):
+        with pytest.raises(SystemExit):
+            main(["comps", "--rows", str(tmp_path / "rows.json"), "--months", months])
+        assert "argument --months" in capsys.readouterr().err
+
+    def test_comps_does_not_call_one_building_concentrated(self, tmp_path, output):
+        rows = tmp_path / "rows.json"
+        rows.write_text(json.dumps([{"price_aed": 1_500_000 + i, "size_sqft": 750, "project": "Tower A"} for i in range(6)]))
+        data = json.loads(output("comps", "--rows", str(rows)).out)
+        assert data["projects"] == 1 and data["notes"] == []
 
     def test_comps_can_keep_new_leases_only(self, tmp_path, output):
         rows = tmp_path / "rows.json"

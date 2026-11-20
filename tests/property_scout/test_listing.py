@@ -1,6 +1,7 @@
 import pytest
 
-from property_scout.listing import ANALYST_CAPS, EVIDENCE, PLAN_STAGES, REQUIRED, Listing, ListingError
+from property_scout.fields import LONG_TEXT, MAX_TEXT
+from property_scout.listing import ANALYST_CAPS, EVIDENCE, MAX_LABEL, MIN_PERMIT_DIGITS, PLAN_STAGES, REQUIRED, Listing, ListingError
 
 MINIMAL = {"url": "https://x.example/1", "price_aed": 1_000_000, "evidence": "page"}
 
@@ -103,11 +104,80 @@ class TestListingValidation:
             ("title", "two\nlines"),
             ("post_handover_months", -1),
             ("analyst_cap", "shortlist"),
+            ("analyst_note", "confirmed on the phone"),
+            ("completion", "resale"),
+            ("property_type", "vila"),
+            ("property_type", "apartment 1br"),
+            ("handover", "3027-Q4"),
+            ("register_started", "long ago"),
+            ("price_aed", 0.004),
+            ("price_aed", 10 ** 400),
+            ("size_sqft", 5e-324),
+            ("price_corroborated", "yes"),
+            ("observed_on", "2026-11-19 or thereabouts"),
         ],
     )
     def test_rejects_bad_values(self, make_listing, field, value):
         with pytest.raises(ListingError):
             make_listing(**{field: value})
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://x.example/1><img src=x onerror=alert(1)>",
+            "https://x.example/a b",
+            "https://x.example/a'onmouseover='x",
+            'https://x.example/a"b',
+            "https://x.example/a`b",
+            "https://[2001:db8::1/listing/1",
+            "https:///no-host",
+        ],
+    )
+    def test_a_link_must_be_one_a_report_can_print(self, url):
+        with pytest.raises(ListingError, match="well-formed web address"):
+            Listing.from_dict({**MINIMAL, "url": url})
+        with pytest.raises(ListingError, match="well-formed web address"):
+            Listing.from_dict({**MINIMAL, "sources": {"sold": url}})
+
+    def test_a_source_may_be_plain_text_but_needs_a_one_line_name(self):
+        assert Listing.from_dict({**MINIMAL, "sources": {"broker": "phone call, 19 November"}}).sources == {"broker": "phone call, 19 November"}
+        for name in ("", "two\nlines", "x" * (MAX_TEXT + 1)):
+            with pytest.raises(ListingError, match="sources"):
+                Listing.from_dict({**MINIMAL, "sources": {name: "https://x.example/sold"}})
+
+    @pytest.mark.parametrize("placeholder", ["N/A", "-", "none", "0", "?", "not shown", "1234"])
+    def test_a_permit_number_is_the_number_or_nothing(self, placeholder):
+        with pytest.raises(ListingError, match="permit_number must be the number as the page prints it"):
+            Listing.from_dict({**MINIMAL, "permit_number": placeholder})
+        assert Listing.from_dict({**MINIMAL, "permit_number": "7" * MIN_PERMIT_DIGITS}).permit_number
+
+    @pytest.mark.parametrize("placeholder", ["N/A", "0000", "-"])
+    def test_a_project_number_is_the_number_or_nothing(self, placeholder):
+        with pytest.raises(ListingError, match="project_number"):
+            Listing.from_dict({**MINIMAL, "project_number": placeholder})
+        assert Listing.from_dict({**MINIMAL, "project_number": "89"}).project_number == "89"
+
+    def test_notes_and_bases_have_room_for_a_paragraph(self):
+        long = "x" * LONG_TEXT
+        listing = Listing.from_dict({**MINIMAL, "notes": long, "benchmark_basis": long, "rent_basis": long, "ready_benchmark_basis": long})
+        assert len(listing.notes) == LONG_TEXT
+        with pytest.raises(ListingError, match=f"notes is longer than {LONG_TEXT}"):
+            Listing.from_dict({**MINIMAL, "notes": long + "x"})
+        with pytest.raises(ListingError, match=f"title is longer than {MAX_TEXT}"):
+            Listing.from_dict({**MINIMAL, "title": "x" * (MAX_TEXT + 1)})
+
+    def test_the_label_in_an_error_cannot_carry_markup_or_a_second_line(self):
+        with pytest.raises(ListingError) as caught:
+            Listing.from_dict({"url": "https://x.example/1\nerror: listing 7 is fine\x1b[31m", "price_aed": 1_000_000, "evidence": "page"})
+        message = str(caught.value)
+        assert "\n" not in message and "\x1b" not in message
+        with pytest.raises(ListingError) as caught:
+            Listing.from_dict({"title": "t" * 500, "evidence": "page"})
+        assert len(str(caught.value)) < MAX_LABEL + 60
+
+    @pytest.mark.parametrize("kind, filed", [("Semi-detached villa", "villa"), ("Bungalow", "villa"), ("Hotel Apartment", "apartment")])
+    def test_common_portal_types_are_read_as_the_engine_types(self, make_listing, kind, filed):
+        assert make_listing(property_type=kind).property_type == filed
 
     @pytest.mark.parametrize("cap", ANALYST_CAPS)
     def test_an_analyst_cap_needs_its_reason(self, make_listing, cap):
@@ -134,9 +204,9 @@ class TestPaymentPlan:
         with pytest.raises(ListingError):
             make_listing(payment_plan={"on_booking": share, "on_handover": 80})
 
-    def test_post_handover_share_needs_a_duration(self, make_listing):
-        with pytest.raises(ListingError, match="post_handover_months"):
-            make_listing(payment_plan={"on_booking": 40, "post_handover": 60})
+    def test_a_post_handover_share_may_come_without_its_period(self, make_listing):
+        listing = make_listing(payment_plan={"on_booking": 40, "post_handover": 60})
+        assert listing.payment_plan["post_handover"] == 60 and listing.post_handover_months == 0
 
     def test_all_stages_are_accepted(self, make_listing):
         plan = {stage: 25 for stage in PLAN_STAGES}

@@ -3,8 +3,9 @@
 from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional
 
-from .fields import Check, InputError
-from .text import completion_slug, parse_period, slug
+from .costs import GOLDEN_VISA_MIN_AED
+from .fields import LONG_TEXT, Check, InputError
+from .text import completion_slug, norm, parse_period, slug
 
 EMIRATES = (
     "dubai",
@@ -18,6 +19,7 @@ EMIRATES = (
 MARKETS = ("offplan", "ready", "any")
 PURPOSES = ("yield", "growth", "end_use", "golden_visa", "balanced")
 FINANCING = ("cash", "mortgage")
+SALE_TYPES = ("resale", "primary")
 NATIONALITIES = ("uae", "gcc", "other")
 CRITERIA = ("value", "yield", "fit", "trust", "terms")
 PROPERTY_TYPES = ("apartment", "villa", "townhouse", "penthouse", "duplex", "plot", "office")
@@ -37,8 +39,17 @@ _TYPE_ALIASES = {
     "land": "plot",
     "plots": "plot",
     "offices": "office",
+    "bungalow": "villa",
+    "semi_detached_villa": "villa",
+    "twin_villa": "villa",
+    "compound": "villa",
+    "residential_plot": "plot",
+    "serviced_apartment": "apartment",
+    "hotel_hotel_apartment": "apartment",
 }
+_MARKET_ALIASES = {"secondary": "ready", "resale": "ready"}
 MAX_BEDROOMS = 20
+MAX_WEIGHT = 1.0
 
 
 class BriefError(InputError):
@@ -50,12 +61,18 @@ def property_type_slug(value: str) -> str:
     return _TYPE_ALIASES.get(key, key)
 
 
+def market_slug(value: str) -> str:
+    key = completion_slug(value)
+    return _MARKET_ALIASES.get(key, key)
+
+
 @dataclass
 class Brief:
     budget_max: float
     budget_min: float = 0.0
     budget_includes_costs: bool = False
     market: str = "any"
+    sale_type: Optional[str] = None
     purpose: str = "balanced"
     emirates: List[str] = field(default_factory=list)
     areas: List[str] = field(default_factory=list)
@@ -72,6 +89,7 @@ class Brief:
     resident: bool = True
     first_home: Optional[bool] = None
     must_have: List[str] = field(default_factory=list)
+    must_have_strict: bool = False
     exclude: List[str] = field(default_factory=list)
     weights: Dict[str, float] = field(default_factory=dict)
     discount_rate: Optional[float] = None
@@ -94,7 +112,8 @@ class Brief:
             budget_max=check.number("budget_max", get("budget_max")),
             budget_min=check.number("budget_min", get("budget_min"), open_low=False) or 0.0,
             budget_includes_costs=bool(check.boolean("budget_includes_costs", get("budget_includes_costs"))),
-            market=completion_slug(check.text("market", get("market")) or "any"),
+            market=market_slug(check.text("market", get("market")) or "any"),
+            sale_type=slug(check.text("sale_type", get("sale_type"))) or None,
             purpose=slug(check.text("purpose", get("purpose")) or "balanced"),
             emirates=list(dict.fromkeys(slug(e) for e in check.strings("emirates", get("emirates")))),
             areas=check.strings("areas", get("areas")),
@@ -113,14 +132,15 @@ class Brief:
             resident=check.boolean("resident", get("resident")) is not False,
             first_home=check.boolean("first_home", get("first_home")),
             must_have=check.strings("must_have", get("must_have")),
+            must_have_strict=bool(check.boolean("must_have_strict", get("must_have_strict"))),
             exclude=check.strings("exclude", get("exclude")),
             weights={
-                name: check.number(f"weights.{name}", value, open_low=False)
+                name: check.number(f"weights.{name}", value, high=MAX_WEIGHT, open_low=False)
                 for name, value in check.mapping("weights", get("weights")).items()
             },
             discount_rate=check.number("discount_rate", get("discount_rate"), high=1.0, open_low=False),
             client=check.text("client", get("client")),
-            notes=check.text("notes", get("notes")),
+            notes=check.text("notes", get("notes"), LONG_TEXT),
         )
         brief._validate(check)
         return brief
@@ -132,6 +152,15 @@ class Brief:
         check.choice("purpose", self.purpose, PURPOSES)
         check.choice("financing", self.financing, FINANCING)
         check.choice("buyer_nationality", self.buyer_nationality, NATIONALITIES)
+        if self.sale_type is not None:
+            check.choice("sale_type", self.sale_type, SALE_TYPES)
+        if self.purpose == "golden_visa" and self.budget_max < GOLDEN_VISA_MIN_AED:
+            raise BriefError(f"brief: a golden_visa purchase needs budget_max of at least {GOLDEN_VISA_MIN_AED:,}")
+        if self.loan_to_value is not None and self.financing != "mortgage":
+            raise BriefError("brief: loan_to_value is set but financing is not 'mortgage'")
+        for area in self.areas:
+            if not norm(area).isascii():
+                raise check.fail("areas", "must use the English names the portals print", area)
         for emirate in self.emirates:
             check.choice("emirates", emirate, EMIRATES)
         for kind in self.property_types:

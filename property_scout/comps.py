@@ -33,9 +33,12 @@ class CompSummary:
     largest_project_share: Optional[float]
     thin: bool
 
+    projects: int = 0
+
     @property
     def concentrated(self) -> bool:
-        return self.largest_project_share is not None and self.largest_project_share > CONCENTRATION_LIMIT
+        """One project among several supplies most of the rows; a single-building benchmark is not concentrated."""
+        return self.projects > 1 and self.largest_project_share > CONCENTRATION_LIMIT
 
 
 def _months_back(today: date, months: int) -> date:
@@ -57,7 +60,8 @@ def summarise(
     A row needs price_aed and size_sqft; date, completion, project, contract and
     term_months are used when present. Rows outside the size band, the look-back
     window or the wanted completion status are dropped and counted, as are
-    renewals and short lets when only new twelve-month leases are wanted.
+    renewals and short lets when only new twelve-month leases are wanted. A row
+    dated after the valuation date is a mistyped one and is dropped with the old ones.
     """
     wanted = completion_slug(completion) if completion else None
     earliest = _months_back(today, months)
@@ -73,13 +77,13 @@ def summarise(
         price = check.number("price_aed", row.get("price_aed"), open_low=False)
         size = check.number("size_sqft", row.get("size_sqft"), open_low=False)
         day = check.day("date", row.get("date"))
-        if not price or not size:
+        if not price or not size or price < 1 or size < 1:
             dropped["incomplete"] += 1
             continue
         if subject_size_sqft and abs(size - subject_size_sqft) > SIZE_BAND * subject_size_sqft:
             dropped["size"] += 1
             continue
-        if day and date.fromisoformat(day) < earliest:
+        if day and not earliest <= date.fromisoformat(day) <= today:
             dropped["date"] += 1
             continue
         if wanted and row.get("completion") and completion_slug(check.text("completion", row["completion"])) != wanted:
@@ -111,4 +115,5 @@ def summarise(
         last_date=max(dates) if dates else None,
         largest_project_share=max(projects.values()) / len(psf) if projects else None,
         thin=len(psf) < MIN_COMPS,
+        projects=len(projects),
     )

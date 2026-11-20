@@ -20,10 +20,12 @@ from property_scout.costs import (
     LTV_CAP_OFFPLAN,
     SCHEDULES,
 )
-from property_scout.dedupe import PRICE_TOLERANCE, SIZE_TOLERANCE
+from property_scout.dedupe import CONFLICTING_TAGS, PRICE_TOLERANCE, SIZE_TOLERANCE
+from property_scout.fields import LONG_TEXT, MAX_TEXT
 from property_scout.listing import ANALYST_CAPS, EVIDENCE, PLAN_STAGES, Listing
 from property_scout.scoring import (
     ASSUMED_YIELD_LOSS,
+    BEHIND_SCHEDULE_GAP,
     CONSIDER_SCORE,
     DEFAULT_DISCOUNT_RATE,
     DEVELOPER_TIER_POINTS,
@@ -158,6 +160,12 @@ class TestDefinitionMatchesEngine:
         assert f"**consider** from {CONSIDER_SCORE:.0f}" in rubric
         assert f"data completeness is under {RATED_CONFIDENCE:.0%}" in rubric
 
+    def test_states_what_holds_an_offer_back(self, definition):
+        rubric = section(definition, "### Rubric")
+        assert f"an uncorroborated first sale {abs(VALUE_BEST_GAP):.0%} or more below registered sales" in rubric
+        assert f"an ask {VALUE_WORST_GAP:.0%} or more above a benchmark of fewer than five sales" in rubric
+        assert f"more than {BEHIND_SCHEDULE_GAP * 100:.0f} points ahead of the share built" in definition
+
     def test_states_the_folding_tolerances(self, definition):
         rubric = section(definition, "### Rubric")
         assert f"size within {SIZE_TOLERANCE:.0%}" in rubric and f"price within {PRICE_TOLERANCE:.0%}" in rubric
@@ -215,6 +223,16 @@ class TestDefinitionMatchesTheInterface:
         intake = section(definition, "## Intake: the Brief")
         wanted = list(Brief.__dataclass_fields__) + list(PURPOSES) + list(PROPERTY_TYPES) + list(NATIONALITIES)
         assert [name for name in wanted if f"`{name}`" not in intake] == []
+
+    def test_states_the_limits_of_a_record_and_the_tags_that_keep_adverts_apart(self, definition):
+        record = section(definition, "### The listing record")
+        assert f"Text fields hold {MAX_TEXT} characters" in record and f"hold {LONG_TEXT:,}" in record
+        tags = [tag for group in CONFLICTING_TAGS for tag in group]
+        assert [tag for tag in tags if f"`{tag}`" not in record] == []
+
+    def test_states_the_default_window_of_the_comps_command(self, definition):
+        assert build_parser().parse_args(["comps", "--rows", "rows.json"]).months == 12
+        assert "It looks back twelve months unless `--months` says otherwise" in definition
 
     def test_names_the_plan_stages_and_analyst_caps(self, definition):
         record = section(definition, "### The listing record")

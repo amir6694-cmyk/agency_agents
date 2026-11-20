@@ -12,11 +12,11 @@ from typing import Dict, List, Optional
 from .brief import CRITERIA, Brief
 from .comps import MIN_COMPS
 from .costs import GOLDEN_VISA_MIN_AED, Buyer, CostBreakdown, Purchase, acquisition_costs
-from .dedupe import dedupe
+from .dedupe import fold, represent
 from .listing import Listing
 from .messages import Note
-from .metrics import PlanValue, benchmark_gap, gross_yield, net_yield, plan_value
-from .text import has_words, months_until, same_place, slug
+from .metrics import PlanValue, benchmark_gap, expected_handover, gross_yield, net_yield, plan_value, schedule_shortfall
+from .text import has_words, months_until, period_end, same_place, slug
 
 PROFILES: Dict[str, Dict[str, float]] = {
     "yield": {"value": 0.25, "yield": 0.40, "fit": 0.10, "trust": 0.20, "terms": 0.05},
@@ -53,16 +53,24 @@ SHORTLIST_SCORE = 65.0
 CONSIDER_SCORE = 50.0
 # Below this share of the weighted criteria, a score says more about what is missing than about the offer.
 RATED_CONFIDENCE = 0.60
-# A criterion resting on few rows or on an estimate counts for half, and its score is pulled halfway to neutral.
+# A criterion resting on few rows or on an estimate counts for half, and a good score is held halfway to neutral.
 PARTIAL = 0.5
 VISA_MARGIN = 0.05
 LOW_TURNOVER_SALES = 6
+# Share of the construction period that may have passed beyond the share built before the date is doubted.
+BEHIND_SCHEDULE_GAP = 0.25
 PERMIT_EMIRATES = ("dubai", "abu_dhabi")
 DEVELOPER_TIER_POINTS = {1: 1.0, 2: 0.6, 3: 0.2}
 UNKNOWN_TIER_POINTS = 0.2
 EVIDENCE_POINTS = {"page": 1.0, "card": 0.5, "lead": 0.0}
 VERDICTS = ("shortlist", "consider", "pass", "needs_data", "verify_first")
 SEVERITIES = ("critical", "warning", "info")
+# Flags that keep a shortlist-level score at consider: a limit of the brief that could not be tested,
+# or a fact that must be settled before the offer is put forward.
+HELD_AT_CONSIDER = (
+    "card_only", "registration_unchecked", "tenanted", "completion_unknown", "bedrooms_unknown", "type_unknown",
+    "handover_unknown", "budget_untested", "must_have_unmet", "teaser_price", "overpriced", "from_price",
+)
 
 
 @dataclass
@@ -109,7 +117,8 @@ class Assessment:
 
     @property
     def cash_at_booking(self) -> Optional[float]:
-        if self.plan is None or not self.listing.offplan:
+        """First sales only: on a resale the buyer pays the seller, not the developer's booking share."""
+        if self.plan is None or not unbuilt(self.listing) or self.listing.sale_type != "primary":
             return None
         return self.listing.price_aed * self.plan.booking_pct / 100 + self.costs.total_costs
 
@@ -138,6 +147,22 @@ def _thin(count: Optional[int]) -> bool:
     return count is None or count < MIN_COMPS
 
 
+def _held(score: float) -> float:
+    """Weak evidence may cap a good score; it never lifts a bad one."""
+    return min(score, NEUTRAL + (score - NEUTRAL) * PARTIAL)
+
+
+def unbuilt(listing: Listing) -> bool:
+    """Off-plan, or of unstated status but recorded with facts only an unbuilt home has."""
+    if listing.completion is not None:
+        return listing.offplan
+    deferred = any(listing.payment_plan.get(stage) for stage in ("during_construction", "on_handover"))
+    return bool(
+        deferred or listing.scheduled_handover or listing.developer_tier or listing.project_number
+        or listing.registration_verified is not None
+    )
+
+
 def weights_for(brief: Brief) -> Dict[str, float]:
     weights = dict(PROFILES[brief.purpose])
     weights.update(brief.weights)
@@ -154,13 +179,15 @@ def _in_area(listing: Listing, area: str) -> bool:
 def _excluded(listing: Listing, term: str) -> bool:
     if slug(term) and slug(term) in listing.tags:
         return True
-    return _in_area(listing, term) or has_words(listing.building, term) or has_words(listing.developer, term)
+    named = (listing.community, listing.sub_community, listing.building, listing.developer)
+    return _in_area(listing, term) or any(has_words(name, term) for name in named)
 
 
 def _months_late(brief: Brief, listing: Listing, today: date) -> Optional[int]:
-    if not (brief.handover_by and listing.offplan and listing.scheduled_handover):
+    expected = expected_handover(listing, today)
+    if not brief.handover_by or listing.completion == "ready" or expected is None:
         return None
-    return months_until(listing.scheduled_handover, today) - months_until(brief.handover_by, today)
+    return months_until(expected, today) - months_until(brief.handover_by, today)
 
 
 def costs_for(brief: Brief, listing: Listing) -> CostBreakdown:
@@ -168,7 +195,7 @@ def costs_for(brief: Brief, listing: Listing) -> CostBreakdown:
         price=listing.price_aed,
         emirate=listing.emirate,
         community=listing.community,
-        completion=listing.completion,
+        completion="offplan" if unbuilt(listing) else listing.completion,
         sale_type=listing.sale_type,
         transfer_fee_waived=listing.transfer_fee_waived,
     )
@@ -186,6 +213,8 @@ def hard_filter(brief: Brief, listing: Listing, costs: CostBreakdown, today: dat
         reasons.append(Note("reject.under_budget", {"price": listing.price_aed, "minimum": brief.budget_min}))
     if brief.market != "any" and listing.completion and listing.completion != brief.market:
         reasons.append(Note("reject.market", {"completion": listing.completion, "market": brief.market}))
+    if brief.sale_type and listing.sale_type and listing.sale_type != brief.sale_type:
+        reasons.append(Note("reject.sale_type", {"sale": listing.sale_type, "asked": brief.sale_type}))
     if brief.emirates and listing.emirate and listing.emirate not in brief.emirates:
         reasons.append(Note("reject.emirate", {"emirate": listing.emirate}))
     if brief.property_types and listing.property_type and listing.property_type not in brief.property_types:
@@ -202,7 +231,7 @@ def hard_filter(brief: Brief, listing: Listing, costs: CostBreakdown, today: dat
             reasons.append(Note("reject.excluded", {"term": term}))
     late = _months_late(brief, listing, today)
     if brief.handover_strict and late is not None and late > 0:
-        reasons.append(Note("reject.handover", {"handover": listing.scheduled_handover, "wanted": brief.handover_by}))
+        reasons.append(Note("reject.handover", {"handover": expected_handover(listing, today), "wanted": brief.handover_by}))
     if brief.purpose == "golden_visa" and listing.price_aed < GOLDEN_VISA_MIN_AED:
         reasons.append(Note("reject.golden_visa", {"threshold": GOLDEN_VISA_MIN_AED}))
     return reasons
@@ -223,7 +252,7 @@ def _value(listing: Listing, gap: Optional[float]) -> Criterion:
     if not _thin(listing.benchmark_count):
         return Criterion("value", score, notes)
     notes.append(Note("value.thin"))
-    return Criterion("value", NEUTRAL + (score - NEUTRAL) * PARTIAL, notes, evidence=PARTIAL)
+    return Criterion("value", _held(score), notes, evidence=PARTIAL)
 
 
 def _yield(listing: Listing, gross: Optional[float], net: Optional[float], costs: CostBreakdown) -> Criterion:
@@ -231,40 +260,52 @@ def _yield(listing: Listing, gross: Optional[float], net: Optional[float], costs
         return Criterion("yield", None, [Note("yield.none")], evidence=0.0)
     if net is None:
         estimate = gross - ASSUMED_YIELD_LOSS
-        note = Note("yield.gross", {"gross": gross, "net": estimate, "basis": listing.rent_basis})
-        return Criterion("yield", _scale(estimate, *NET_YIELD_RANGE), [note], evidence=PARTIAL)
+        code = "yield.gross" if costs.rates_known else "yield.costs_unknown"
+        note = Note(code, {"gross": gross, "net": estimate, "basis": listing.rent_basis})
+        return Criterion("yield", _held(_scale(estimate, *NET_YIELD_RANGE)), [note], evidence=PARTIAL)
     notes = [Note("yield.net", {"net": net, "gross": gross, "basis": listing.rent_basis})]
-    if _thin(listing.rent_count) or not costs.rates_known:
-        notes.append(Note("yield.thin"))
-        return Criterion("yield", _scale(net, *NET_YIELD_RANGE), notes, evidence=PARTIAL)
-    return Criterion("yield", _scale(net, *NET_YIELD_RANGE), notes)
+    score = _scale(net, *NET_YIELD_RANGE)
+    if not _thin(listing.rent_count):
+        return Criterion("yield", score, notes)
+    notes.append(Note("yield.thin"))
+    return Criterion("yield", _held(score), notes, evidence=PARTIAL)
 
 
 def _fit(brief: Brief, listing: Listing, today: date) -> Criterion:
-    parts: List[float] = []
+    """Each preference the brief states is one test; a test the listing gives no data for is neutral and unevidenced."""
+    scores: List[float] = []
     notes: List[Note] = []
+    untested = 0
     if brief.areas and not brief.areas_strict:
         hit = any(_in_area(listing, area) for area in brief.areas)
-        parts.append(100.0 if hit else 0.0)
+        scores.append(100.0 if hit else 0.0)
         notes.append(Note("fit.area_hit" if hit else "fit.area_miss"))
     if brief.must_have:
         met = sum(1 for term in brief.must_have if slug(term) in listing.tags)
-        parts.append(100.0 * met / len(brief.must_have))
+        scores.append(100.0 * met / len(brief.must_have))
         notes.append(Note("fit.must_have", {"met": met, "wanted": len(brief.must_have)}))
     if brief.size_min_sqft and listing.size_sqft:
-        parts.append(_scale(listing.size_sqft / brief.size_min_sqft, SIZE_SHORTFALL_FLOOR, 1.0))
+        scores.append(_scale(listing.size_sqft / brief.size_min_sqft, SIZE_SHORTFALL_FLOOR, 1.0))
         notes.append(Note("fit.size", {"size": float(listing.size_sqft), "wanted": float(brief.size_min_sqft)}))
-    if brief.handover_by and listing.offplan:
+    elif brief.size_min_sqft:
+        untested += 1
+        scores.append(NEUTRAL)
+        notes.append(Note("fit.size_unknown", {"wanted": float(brief.size_min_sqft)}))
+    if brief.handover_by and listing.completion == "ready":
+        scores.append(100.0)
+        notes.append(Note("fit.handover_ok"))
+    elif brief.handover_by:
         late = _months_late(brief, listing, today)
         if late is None:
-            parts.append(NEUTRAL)
+            untested += 1
+            scores.append(NEUTRAL)
             notes.append(Note("fit.handover_unknown"))
         else:
-            parts.append(max(0.0, 100.0 - LATE_HANDOVER_PENALTY_PER_MONTH * max(late, 0)))
+            scores.append(max(0.0, 100.0 - LATE_HANDOVER_PENALTY_PER_MONTH * max(late, 0)))
             notes.append(Note("fit.handover_ok") if late <= 0 else Note("fit.handover_late", {"late": late}))
-    if not parts:
+    if not scores:
         return Criterion("fit", None, [Note("fit.none")], applicable=False, evidence=0.0)
-    return Criterion("fit", sum(parts) / len(parts), notes)
+    return Criterion("fit", sum(scores) / len(scores), notes, evidence=1 - untested / len(scores))
 
 
 def _seen_points(listing: Listing, today: date, notes: List[Note]) -> float:
@@ -284,13 +325,17 @@ def _trust(listing: Listing, today: date) -> Criterion:
     """Every check counts whether or not it was made: one that was skipped scores nothing."""
     notes: List[Note] = [Note(f"trust.evidence_{listing.evidence}")]
     points: List[float] = [EVIDENCE_POINTS[listing.evidence], _seen_points(listing, today, notes)]
-    if listing.permit_number or listing.verified:
+    if listing.sale_type == "primary":
+        # A first sale has no title deed for a portal to verify; what can be checked is the price.
+        points.append(1.0 if listing.price_corroborated else 0.0)
+        notes.append(Note("trust.corroborated" if listing.price_corroborated else "trust.uncorroborated"))
+    elif listing.permit_number or listing.verified:
         points.append(1.0)
         notes.append(Note("trust.permit" if listing.permit_number else "trust.verified"))
     else:
         points.append(0.0)
         notes.append(Note("trust.unverified" if listing.verified is False else "trust.unchecked"))
-    if listing.offplan:
+    if unbuilt(listing):
         if listing.developer_tier is None:
             points.append(UNKNOWN_TIER_POINTS)
             notes.append(Note("trust.tier_unknown"))
@@ -311,10 +356,14 @@ def _trust(listing: Listing, today: date) -> Criterion:
 def _terms(listing: Listing, plan: Optional[PlanValue], costs: CostBreakdown, rate: float) -> Criterion:
     if listing.sale_type == "resale":
         return Criterion("terms", None, [Note("terms.resale")], applicable=False, evidence=0.0)
-    if not listing.payment_plan and not listing.offplan:
+    if not listing.payment_plan and not unbuilt(listing):
         return Criterion("terms", None, [Note("terms.na")], applicable=False, evidence=0.0)
+    if listing.sale_type is None:
+        return Criterion("terms", None, [Note("terms.sale_type_unknown")], evidence=0.0)
+    if not listing.payment_plan:
+        return Criterion("terms", None, [Note("terms.no_plan")], evidence=0.0)
     if plan is None:
-        return Criterion("terms", None, [Note("terms.missing")], evidence=0.0)
+        return Criterion("terms", None, [Note("terms.no_date")], evidence=0.0)
     notes = [
         Note(
             "terms.scored",
@@ -341,6 +390,8 @@ def cost_flags(costs: CostBreakdown, emirate: Optional[str]) -> List[Flag]:
         add("warning", "cost_rates_partial")
     if costs.waiver_ignored:
         add("warning", "waiver_ignored")
+    if costs.waiver_unconfirmed:
+        add("warning", "waiver_unconfirmed")
     if costs.loan_ignored:
         add("warning", "offplan_finance", cap=costs.ltv_cap)
     elif costs.loan_capped:
@@ -349,6 +400,8 @@ def cost_flags(costs: CostBreakdown, emirate: Optional[str]) -> List[Flag]:
         add("info", "transfer_seller_pays")
     elif costs.split_by_default:
         add("info", "transfer_split")
+    if costs.trustee_quote_needed:
+        add("info", "trustee_quote")
     return flags
 
 
@@ -358,7 +411,8 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
     def add(severity: str, code: str, **params) -> None:
         flags.append(Flag(severity, Note(f"flag.{code}", params)))
 
-    offplan = listing.offplan
+    building = unbuilt(listing)
+    primary = listing.sale_type == "primary"
     if listing.analyst_cap:
         add("critical" if listing.analyst_cap == "verify_first" else "warning", "analyst", text=listing.analyst_note)
     if listing.evidence == "lead":
@@ -367,11 +421,13 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("critical", "implausible_price", gap=gap)
     if gross is not None and gross > IMPLAUSIBLE_GROSS_YIELD:
         add("critical", "implausible_yield", gross=gross)
-    if offplan and listing.registration_verified is False:
+    if building and listing.registration_verified is False:
         add("critical", "registration_not_found")
 
     if gap is not None and gap >= VALUE_WORST_GAP:
         add("warning", "overpriced", gap=gap)
+    elif primary and gap is not None and gap <= VALUE_BEST_GAP and not listing.price_corroborated:
+        add("warning", "teaser_price", gap=gap)
     if listing.benchmark_psf is not None and listing.size_sqft and _thin(listing.benchmark_count):
         add("warning", "thin_benchmark")
     if listing.from_price:
@@ -380,37 +436,53 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("warning", "completion_unknown")
     if listing.size_sqft is None:
         add("warning", "size_missing")
+    if listing.bedrooms is None and (brief.bedrooms_min is not None or brief.bedrooms_max is not None):
+        add("warning", "bedrooms_unknown")
+    if listing.property_type is None and brief.property_types:
+        add("warning", "type_unknown")
+    if brief.must_have_strict:
+        unmet = [term for term in brief.must_have if slug(term) not in listing.tags]
+        if unmet:
+            add("warning", "must_have_unmet", terms=", ".join(unmet))
     if listing.listed_days_ago is not None and listing.listed_days_ago > STALE_AFTER_DAYS:
         add("warning", "stale", days=listing.listed_days_ago)
     if listing.observed_on and (date.fromisoformat(listing.observed_on) - today).days > 1:
         add("warning", "seen_in_future", seen=listing.observed_on)
-    if offplan:
+    if building:
         if listing.registration_verified is None:
             add("warning", "registration_unchecked")
         if listing.developer_tier == 3:
             add("warning", "developer_unproven")
+        if listing.sale_type is None:
+            add("warning", "sale_type_unknown")
         if listing.price_psf and listing.ready_benchmark_psf:
             premium = listing.price_psf / listing.ready_benchmark_psf - 1
             if premium > OFFPLAN_PREMIUM_LIMIT:
                 add("warning", "offplan_premium", premium=premium)
-        if listing.register_completion and months_until(listing.register_completion, today) < 0:
-            add("warning", "register_overdue", date=listing.register_completion, progress=listing.register_progress_pct)
-        elif not listing.register_completion and listing.handover and months_until(listing.handover, today) < 0:
+        if listing.register_completion and period_end(listing.register_completion) < today:
+            add("warning", "register_overdue", date=listing.register_completion)
+        elif not listing.register_completion and listing.handover and period_end(listing.handover) < today:
             add("warning", "handover_passed", handover=listing.handover)
         if listing.register_completion and listing.handover:
-            gap_months = months_until(listing.register_completion, today) - months_until(listing.handover, today)
-            if gap_months > 0:
+            if months_until(listing.register_completion, today) > months_until(listing.handover, today):
                 add("warning", "handover_mismatch", advert=listing.handover, register=listing.register_completion)
-        if brief.handover_by and not listing.scheduled_handover:
-            add("warning", "handover_unknown")
+        pace = schedule_shortfall(listing)
+        if pace and pace[0] - pace[1] > BEHIND_SCHEDULE_GAP:
+            add("warning", "behind_schedule", elapsed=pace[0], built=pace[1])
         late = _months_late(brief, listing, today)
         if late is not None and late > 0:
-            add("warning", "late_handover", handover=listing.scheduled_handover, late=late, wanted=brief.handover_by)
+            add("warning", "late_handover", handover=expected_handover(listing, today), late=late, wanted=brief.handover_by)
         if listing.register_inspected_on and (today - date.fromisoformat(listing.register_inspected_on)).days > INSPECTION_STALE_DAYS:
             add("info", "inspection_stale", inspected=listing.register_inspected_on)
+        if listing.sale_type == "resale":
+            add("info", "resale_terms")
+    if brief.handover_by and listing.completion != "ready" and expected_handover(listing, today) is None:
+        add("warning", "handover_unknown")
     if brief.purpose == "end_use" and "tenanted" in listing.tags:
         add("warning", "tenanted")
     flags.extend(cost_flags(costs, listing.emirate))
+    if brief.budget_includes_costs and not costs.rates_known:
+        add("warning", "budget_untested")
     if brief.financing == "mortgage" and not brief.resident:
         add("warning", "non_resident_finance")
     if brief.purpose == "golden_visa":
@@ -418,17 +490,19 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
             add("warning", "visa_margin", threshold=GOLDEN_VISA_MIN_AED)
         if listing.benchmark_psf and listing.size_sqft and listing.benchmark_psf * listing.size_sqft < GOLDEN_VISA_MIN_AED:
             add("warning", "visa_benchmark_below", implied=listing.benchmark_psf * listing.size_sqft, threshold=GOLDEN_VISA_MIN_AED)
-        if offplan or brief.financing == "mortgage":
+        if building or brief.financing == "mortgage":
             add("warning", "visa_conditions")
 
     if costs.total_outlay > brief.budget_max:
         add("info", "costs_exceed_budget", outlay=costs.total_outlay)
-    if listing.emirate in PERMIT_EMIRATES and not listing.permit_number:
+    if listing.emirate in PERMIT_EMIRATES and not primary and not listing.permit_number and not listing.verified:
         add("info", "no_permit")
     if listing.benchmark_psf is None and listing.size_sqft is not None:
         add("info", "no_benchmark")
-    if offplan and listing.annual_rent_aed is not None:
+    if building and listing.annual_rent_aed is not None:
         add("info", "projected_rent")
+    if listing.payment_plan.get("post_handover") and not listing.post_handover_months:
+        add("info", "post_handover_undated")
     if listing.building_sales_12m is not None and listing.building_sales_12m < LOW_TURNOVER_SALES:
         add("info", "low_turnover", sales=listing.building_sales_12m)
     if listing.evidence == "card":
@@ -440,27 +514,27 @@ def _verdict(brief: Brief, listing: Listing, score: float, confidence: float, fl
     codes = {flag.code for flag in flags}
     if any(flag.severity == "critical" for flag in flags):
         return "verify_first"
+    if listing.analyst_cap == "pass":
+        return "pass"
     if confidence < RATED_CONFIDENCE:
         return "needs_data"
+    if "overpriced" in codes and "thin_benchmark" not in codes:
+        return "pass"
     verdict = "shortlist" if score >= SHORTLIST_SCORE else "consider" if score >= CONSIDER_SCORE else "pass"
-    held_back = (
-        listing.evidence != "page"
-        or (listing.offplan and not listing.registration_verified)
-        or "tenanted" in codes
+    held = (
+        codes.intersection(HELD_AT_CONSIDER)
         or listing.analyst_cap == "consider"
+        or ("behind_schedule" in codes and brief.handover_by)
     )
-    if verdict == "shortlist" and held_back:
-        verdict = "consider"
-    if listing.analyst_cap == "pass" or ("overpriced" in codes and "thin_benchmark" not in codes):
-        verdict = "pass"
-    return verdict
+    return "consider" if verdict == "shortlist" and held else verdict
 
 
 def assess_one(brief: Brief, listing: Listing, costs: CostBreakdown, weights: Dict[str, float], today: date) -> Assessment:
     rate = brief.discount_rate if brief.discount_rate is not None else DEFAULT_DISCOUNT_RATE
     gap = benchmark_gap(listing)
     gross = gross_yield(listing)
-    net = net_yield(listing, costs.total_outlay, RUNNING_COST_RATIO)
+    # A net yield is over price plus costs: without the costs there is none to state.
+    net = net_yield(listing, costs.total_outlay, RUNNING_COST_RATIO) if costs.rates_known else None
     plan = plan_value(listing, today, rate)
     criteria = [
         _value(listing, gap),
@@ -494,25 +568,33 @@ def assess_one(brief: Brief, listing: Listing, costs: CostBreakdown, weights: Di
 
 
 def assess(brief: Brief, listings: List[Listing], today: date) -> Result:
+    """Fold the adverts into units, then test each unit against the brief on everything any of its adverts showed.
+
+    A unit is represented by its best-evidenced advert that passes; one advert priced over
+    the budget does not remove a unit that another advert offers within it.
+    """
     weights = weights_for(brief)
     assumed = brief.emirates[0] if len(brief.emirates) == 1 else None
-    survivors: List[Listing] = []
-    rejected: List[Rejection] = []
-    for listing in listings:
-        if listing.emirate is None and assumed:
-            listing = replace(listing, emirate=assumed)
-        reasons = hard_filter(brief, listing, costs_for(brief, listing), today)
-        if reasons:
-            rejected.append(Rejection(listing, reasons))
-        else:
-            survivors.append(listing)
+    stated = [replace(listing, emirate=assumed) if listing.emirate is None and assumed else listing for listing in listings]
     ranked: List[Assessment] = []
-    for listing, duplicates in dedupe(survivors):
-        assessment = assess_one(brief, listing, costs_for(brief, listing), weights, today)
-        assessment.duplicates = duplicates
-        cheapest = min((d.price_aed for d in duplicates), default=listing.price_aed)
-        if cheapest < listing.price_aed:
-            assessment.flags.append(Flag("info", Note("flag.advertised_lower", {"price": cheapest})))
-        ranked.append(assessment)
-    ranked.sort(key=lambda a: (VERDICTS.index(a.verdict), -a.score, -a.confidence, a.listing.price_aed, a.listing.url))
+    rejected: List[Rejection] = []
+    for group in fold(stated):
+        refusal: Optional[Rejection] = None
+        for index in range(len(group)):
+            listing = represent(group, index)
+            costs = costs_for(brief, listing)
+            reasons = hard_filter(brief, listing, costs, today)
+            if reasons:
+                refusal = refusal or Rejection(listing, reasons)
+                continue
+            assessment = assess_one(brief, listing, costs, weights, today)
+            assessment.duplicates = group[:index] + group[index + 1:]
+            cheapest = min((d.price_aed for d in assessment.duplicates), default=listing.price_aed)
+            if cheapest < listing.price_aed:
+                assessment.flags.append(Flag("info", Note("flag.advertised_lower", {"price": cheapest})))
+            ranked.append(assessment)
+            break
+        else:
+            rejected.append(refusal)
+    ranked.sort(key=lambda a: (VERDICTS.index(a.verdict), -a.score, -a.confidence, a.costs.total_outlay, a.listing.url))
     return Result(brief=brief, as_of=today, ranked=ranked, rejected=rejected, weights=weights, received=len(listings))

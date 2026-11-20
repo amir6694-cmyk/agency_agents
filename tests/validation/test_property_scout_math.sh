@@ -93,6 +93,16 @@ check "Abu Dhabi mortgaged resale" \
     "$(awk 'BEGIN { p = 2000000; print p * 0.02 + 875 + p * 0.021 + p * 0.5 * 0.001 + 450 * 1.05 }')" \
     "$(costs_field total_costs_aed --price 2000000 --emirate abu_dhabi --sale-type resale --financing mortgage --ltv 0.5)"
 
+# The trustee's fee for transferring an unbuilt unit is not published, so it is left out
+check "Dubai off-plan resale" \
+    "$(awk 'BEGIN { p = 1500000; print p * 0.04 + 20 + p * 0.021 }')" \
+    "$(costs_field total_costs_aed --price 1500000 --emirate dubai --completion offplan --sale-type resale)"
+
+# The Central Bank ceiling applies where no fee schedule is published
+check "Fujairah investor asking 90%, own funds at the 60% ceiling" \
+    "$(awk 'BEGIN { print 1000000 * 0.40 }')" \
+    "$(costs_field own_funds_aed --price 1000000 --emirate fujairah --sale-type resale --financing mortgage --ltv 0.9)"
+
 check "Ras Al Khaimah resale" \
     "$(awk 'BEGIN { print 2000000 * 0.02 + 400 }')" \
     "$(costs_field total_costs_aed --price 2000000 --emirate ras_al_khaimah --sale-type resale)"
@@ -120,7 +130,7 @@ cat > "$WORK/listings.json" <<'JSON'
   {"url": "https://example.com/a", "evidence": "page", "price_aed": 2000000, "emirate": "dubai",
    "community": "Test", "building": "Tower A", "bedrooms": 2, "size_sqft": 1000, "completion": "ready",
    "sale_type": "resale", "annual_rent_aed": 130000, "rent_count": 6, "service_charge_psf": 18,
-   "benchmark_psf": 2000, "benchmark_count": 6, "permit_number": "71", "observed_on": "2026-11-19"},
+   "benchmark_psf": 2000, "benchmark_count": 6, "permit_number": "7100000071", "observed_on": "2026-11-19"},
   {"url": "https://example.com/b", "evidence": "page", "price_aed": 1500000, "emirate": "dubai",
    "community": "Test", "building": "Tower B", "bedrooms": 1, "size_sqft": 750, "completion": "offplan",
    "sale_type": "primary", "handover": "2028-11",
@@ -131,7 +141,10 @@ cat > "$WORK/listings.json" <<'JSON'
   {"url": "https://example.com/d", "evidence": "card", "price_aed": 1800000, "emirate": "dubai",
    "community": "Test", "building": "Tower D", "bedrooms": 2, "size_sqft": 1000, "completion": "ready",
    "sale_type": "resale", "annual_rent_aed": 117000, "benchmark_psf": 2000, "benchmark_count": 3,
-   "observed_on": "2026-11-12"}
+   "observed_on": "2026-11-12"},
+  {"url": "https://example.com/e", "evidence": "page", "price_aed": 1000000, "emirate": "dubai",
+   "community": "Test", "building": "Tower E", "bedrooms": 1, "size_sqft": 600, "completion": "ready",
+   "sale_type": "resale", "annual_rent_aed": 95000, "rent_count": 1, "service_charge_psf": 10}
 ]
 JSON
 python3 -m property_scout score --brief "$WORK/brief.json" --listings "$WORK/listings.json" --today 2026-11-19 > "$WORK/out.json"
@@ -183,6 +196,11 @@ check "yield score" \
 check "yield score from a gross figure" \
     "$(awk 'BEGIN { n = 117000 / 1800000 - 0.025; print 100 * (n - 0.02) / (0.075 - 0.02) }')" \
     "$(field d criteria.@yield.score)" 0.06
+
+# A good yield on a single lease is held halfway to the neutral 50
+check "yield score on one lease" \
+    "$(awk 'BEGIN { p = 1000000; costs = p * 0.04 + 520 + 4200 + p * 0.021; n = (95000 - 6000 - 0.13 * 95000) / (p + costs); s = 100 * (n - 0.02) / 0.055; print 50 + (s - 50) / 2 }')" \
+    "$(field e criteria.@yield.score)" 0.06
 
 # Trust: the share of checks made and passed
 check "trust, opened page seen today with a permit" "100" "$(field a criteria.@trust.score)" 0.06

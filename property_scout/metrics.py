@@ -5,7 +5,7 @@ from datetime import date
 from typing import List, Optional, Tuple
 
 from .listing import Listing
-from .text import months_until
+from .text import months_until, parse_period, period_end
 
 
 @dataclass
@@ -21,7 +21,8 @@ def benchmark_gap(listing: Listing) -> Optional[float]:
     """Asking price per sqft relative to the benchmark; negative means below it."""
     if listing.price_psf is None or listing.benchmark_psf is None:
         return None
-    return listing.price_psf / listing.benchmark_psf - 1
+    # Rounded so that an ask exactly 20% above lands on the threshold and not a hair under it.
+    return round(listing.price_psf / listing.benchmark_psf - 1, 9)
 
 
 def gross_yield(listing: Listing) -> Optional[float]:
@@ -39,13 +40,36 @@ def net_yield(listing: Listing, total_cost: float, running_cost_ratio: float) ->
     return (listing.annual_rent_aed - service_charges - running_costs) / total_cost
 
 
+def expected_handover(listing: Listing, today: date) -> Optional[str]:
+    """The register's date while it is still ahead, otherwise the advert's; none once every stated date has passed."""
+    for period in (listing.register_completion, listing.handover):
+        if period and period_end(period) >= today:
+            return period
+    return None
+
+
+def schedule_shortfall(listing: Listing) -> Optional[Tuple[float, float]]:
+    """(share of the construction period elapsed when inspected, share built), when the register gives both ends."""
+    finish = listing.register_completion or listing.handover
+    if not (listing.register_started and finish and listing.register_progress_pct is not None and listing.register_inspected_on):
+        return None
+    start_year, start_month, _ = parse_period(listing.register_started)
+    start = date(start_year, start_month, 1)
+    total = (period_end(finish) - start).days
+    if total <= 0:
+        return None
+    elapsed = (date.fromisoformat(listing.register_inspected_on) - start).days / total
+    return min(max(elapsed, 0.0), 1.0), listing.register_progress_pct / 100
+
+
 def months_to_handover(listing: Listing, today: date) -> Optional[int]:
     """Counted to the start of the stated period, so a vague date cannot flatter a plan.
 
-    Zero for a finished unit; unknown for an unbuilt one whose plan defers money to an undated handover.
+    Zero for a finished unit or a date that has passed; unknown for an unbuilt one whose plan defers money to an undated handover.
     """
     if listing.scheduled_handover:
-        return max(months_until(listing.scheduled_handover, today, start=True), 0)
+        expected = expected_handover(listing, today)
+        return max(months_until(expected, today, start=True), 0) if expected else 0
     deferred = any(listing.payment_plan.get(stage) for stage in ("during_construction", "on_handover", "post_handover"))
     if deferred and listing.completion != "ready":
         return None
@@ -72,9 +96,12 @@ def plan_cashflows(listing: Listing, today: date) -> Optional[List[Tuple[int, fl
     if plan.get("on_handover"):
         flows.append((months, plan["on_handover"] / 100))
     post = plan.get("post_handover", 0) / 100
-    if post:
-        span = listing.post_handover_months
+    span = listing.post_handover_months
+    if post and span:
         flows.extend((months + m, post / span) for m in range(1, span + 1))
+    elif post:
+        # A post-handover share with no stated period is costed as due on handover.
+        flows.append((months, post))
     return flows
 
 

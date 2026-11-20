@@ -127,6 +127,8 @@ class CostBreakdown:
     loan_ignored: bool = False
     waived_rate: float = 0.0
     waiver_ignored: bool = False
+    waiver_unconfirmed: bool = False
+    trustee_quote_needed: bool = False
     seller_pays_transfer: bool = False
     split_by_default: bool = False
 
@@ -169,11 +171,26 @@ def _trustee_fee(schedule: Schedule, price: float) -> float:
     return 0.0
 
 
+def _finance(result: CostBreakdown, purchase: Purchase, buyer: Buyer) -> None:
+    """The loan the Central Bank's ceiling allows; it does not depend on any emirate's fee schedule."""
+    if buyer.financing != "mortgage":
+        return
+    if purchase.completion == "offplan":
+        result.loan_ignored = True
+        result.ltv_cap = LTV_CAP_OFFPLAN
+        return
+    result.ltv_cap = ltv_cap(purchase.price, purchase.completion, buyer.first_home, buyer.nationality == "uae")
+    result.ltv_asked = buyer.loan_to_value
+    result.loan = purchase.price * min(buyer.loan_to_value or result.ltv_cap, result.ltv_cap)
+
+
 def acquisition_costs(purchase: Purchase, buyer: Buyer) -> CostBreakdown:
     price = purchase.price
     schedule = SCHEDULES.get(purchase.emirate or "")
     if schedule is None:
-        return CostBreakdown(price=price, rates_known=False, complete=False)
+        result = CostBreakdown(price=price, rates_known=False, complete=False)
+        _finance(result, purchase, buyer)
+        return result
     result = CostBreakdown(price=price, complete=schedule.complete, split_by_default=schedule.split_by_default)
     primary = purchase.sale_type == "primary"
     offplan = purchase.completion == "offplan"
@@ -187,33 +204,33 @@ def acquisition_costs(purchase: Purchase, buyer: Buyer) -> CostBreakdown:
         result.items.append(CostItem(Note("cost.transfer_fee_seller", {"rate": rate}), 0.0))
     elif purchase.transfer_fee_waived and primary:
         result.waived_rate = rate
+        result.split_by_default = False
         result.items.append(CostItem(Note("cost.transfer_fee_waived", {"rate": rate}), 0.0))
     else:
-        result.waiver_ignored = purchase.transfer_fee_waived
-        result.items.append(CostItem(Note("cost.transfer_fee", {"rate": rate}), max(price * rate, minimum)))
+        result.waiver_ignored = purchase.transfer_fee_waived and purchase.sale_type == "resale"
+        result.waiver_unconfirmed = purchase.transfer_fee_waived and purchase.sale_type is None
+        code = "cost.transfer_fee_minimum" if price * rate < minimum else "cost.transfer_fee"
+        result.items.append(CostItem(Note(code, {"rate": rate}), max(price * rate, minimum)))
 
     fixed = schedule.fixed_offplan if offplan else schedule.fixed_ready
     if fixed:
         result.items.append(CostItem(Note("cost.registration_fee"), fixed))
     if not primary:
-        trustee = _trustee_fee(schedule, price)
-        if trustee:
-            result.items.append(CostItem(Note("cost.trustee_fee"), trustee))
+        # The trustee's fee for transferring an unbuilt unit is not in any published schedule.
+        if offplan and schedule.trustee_tiers:
+            result.trustee_quote_needed = True
+        else:
+            trustee = _trustee_fee(schedule, price)
+            if trustee:
+                result.items.append(CostItem(Note("cost.trustee_fee"), trustee))
         if schedule.agency_rate:
             commission = price * schedule.agency_rate
             if schedule.agency_cap:
                 commission = min(commission, schedule.agency_cap)
             result.items.append(CostItem(Note("cost.agency_fee", {"rate": schedule.agency_rate}), commission * (1 + VAT)))
 
-    if buyer.financing == "mortgage":
-        if offplan:
-            result.loan_ignored = True
-            result.ltv_cap = LTV_CAP_OFFPLAN
-        else:
-            result.ltv_cap = ltv_cap(price, purchase.completion, buyer.first_home, buyer.nationality == "uae")
-            result.ltv_asked = buyer.loan_to_value
-            result.loan = price * min(buyer.loan_to_value or result.ltv_cap, result.ltv_cap)
-            if schedule.mortgage_rate:
-                amount = result.loan * schedule.mortgage_rate + schedule.mortgage_fixed
-                result.items.append(CostItem(Note("cost.mortgage_registration", {"rate": schedule.mortgage_rate}), amount))
+    _finance(result, purchase, buyer)
+    if result.loan and schedule.mortgage_rate:
+        amount = result.loan * schedule.mortgage_rate + schedule.mortgage_fixed
+        result.items.append(CostItem(Note("cost.mortgage_registration", {"rate": schedule.mortgage_rate}), amount))
     return result

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from property_scout.text import completion_slug, has_words, months_until, norm, parse_period, place, same_place, slug
+from property_scout.text import MAX_YEAR, MIN_YEAR, completion_slug, has_words, months_until, norm, parse_period, period_end, place, same_place, slug
 
 
 class TestNormalisation:
@@ -24,9 +24,12 @@ class TestNormalisation:
     def test_offplan_aliases(self, raw):
         assert completion_slug(raw) == "offplan"
 
-    @pytest.mark.parametrize("raw", ["Ready", "completed", "Secondary", "resale"])
+    @pytest.mark.parametrize("raw", ["Ready", "completed"])
     def test_ready_aliases(self, raw):
         assert completion_slug(raw) == "ready"
+
+    def test_a_sale_type_is_not_a_completion_status(self):
+        assert completion_slug("resale") == "resale" and completion_slug("secondary") == "secondary"
 
 
 class TestPlaces:
@@ -46,6 +49,20 @@ class TestPlaces:
 
     def test_an_unknown_place_is_itself(self):
         assert place("Business Bay") == "business bay"
+
+    @pytest.mark.parametrize(
+        "written, filed",
+        [
+            ("Jumeirah Village Circle (JVC)", "jumeirah village circle"),
+            ("Jumeirah Village Circle, Dubai", "jumeirah village circle"),
+            ("The Palm Jumeirah", "palm jumeirah"),
+            ("Business Bay, Dubai, UAE", "business bay"),
+            ("(JLT)", "jumeirah lake towers"),
+            ("Al Reem Island (Abu Dhabi)", "al reem island"),
+        ],
+    )
+    def test_a_decorated_name_is_read_as_the_place(self, written, filed):
+        assert place(written) == filed
 
     def test_different_places_do_not_match(self):
         assert not same_place("Dubai Marina", "Dubai Marina Mall Hotel")
@@ -88,6 +105,26 @@ class TestPeriods:
     def test_rejects_unsupported_forms(self, raw):
         with pytest.raises(ValueError, match="unrecognised period"):
             parse_period(raw)
+
+    @pytest.mark.parametrize("raw", [f"{MIN_YEAR - 1}-Q4", f"{MAX_YEAR + 1}", "3027-11", "0001-01-01"])
+    def test_rejects_years_no_handover_could_fall_in(self, raw):
+        with pytest.raises(ValueError, match="year outside"):
+            parse_period(raw)
+
+    @pytest.mark.parametrize(
+        "raw, last_day",
+        [
+            ("2026-11-01", date(2026, 11, 1)),
+            ("2026-11", date(2026, 11, 30)),
+            ("Nov 2026", date(2026, 11, 30)),
+            ("2026-Q4", date(2026, 12, 31)),
+            ("2026", date(2026, 12, 31)),
+            ("2028-02", date(2028, 2, 29)),
+            ("2027-02-31", date(2027, 2, 28)),
+        ],
+    )
+    def test_period_end_keeps_the_day_when_one_is_written(self, raw, last_day):
+        assert period_end(raw) == last_day
 
     def test_months_until_counts_to_period_end(self):
         assert months_until("2027-Q4", date(2026, 11, 19)) == 13

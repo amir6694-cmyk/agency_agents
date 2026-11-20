@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from calendar import monthrange
 from datetime import date
 from typing import Optional, Tuple
 
@@ -19,9 +20,8 @@ _COMPLETION_ALIASES = {
     "off_plan": "offplan",
     "under_construction": "offplan",
     "completed": "ready",
-    "secondary": "ready",
-    "resale": "ready",
 }
+MIN_YEAR, MAX_YEAR = 2000, 2100
 # Short forms buyers and adverts use for a community, mapped to the name portals file it under.
 _PLACE_ALIASES = {
     "jvc": "jumeirah village circle",
@@ -69,9 +69,23 @@ def completion_slug(value: str) -> str:
     return _COMPLETION_ALIASES.get(key, key)
 
 
+def _without_article(key: str) -> str:
+    return key[4:] if key.startswith("the ") else key
+
+
 def place(value: Optional[str]) -> str:
-    key = norm(value)
-    return _PLACE_ALIASES.get(key, key)
+    """The name portals file a community under.
+
+    Adverts decorate it ('Jumeirah Village Circle (JVC)', 'Business Bay, Dubai', 'The Palm Jumeirah'),
+    so each comma or bracket part is tried against the short forms before the first part is taken as it stands.
+    """
+    text = str(value or "")
+    keys = [key for key in (norm(part) for part in [text] + re.split(r"[,(]", text)) if key]
+    for key in keys:
+        for candidate in (key, _without_article(key)):
+            if candidate in _PLACE_ALIASES:
+                return _PLACE_ALIASES[candidate]
+    return _without_article(keys[1]) if len(keys) > 1 else ""
 
 
 def same_place(a: Optional[str], b: Optional[str]) -> bool:
@@ -83,9 +97,7 @@ def has_words(haystack: Optional[str], needle: Optional[str]) -> bool:
     return bool(wanted) and f" {wanted} " in f" {norm(haystack)} "
 
 
-def parse_period(value: str) -> Tuple[int, int, int]:
-    """(year, first month, last month) of '2027-Q4', 'Q4 2027', '2027-11', 'Nov 2027', '2027-11-30' or '2027'."""
-    text = " ".join(str(value).replace(",", " ").split()).upper()
+def _period(text: str) -> Optional[Tuple[int, int, int]]:
     match = re.fullmatch(r"(\d{4})[-\s]?Q([1-4])", text)
     if match:
         first = _QUARTER_FIRST_MONTH[int(match.group(2))]
@@ -104,7 +116,25 @@ def parse_period(value: str) -> Tuple[int, int, int]:
     match = re.fullmatch(r"(\d{4})", text)
     if match:
         return int(match.group(1)), 1, 12
-    raise ValueError(f"unrecognised period {value!r}; write it as 2027-Q4, 2027-11, Nov 2027, 2027-11-30 or 2027")
+    return None
+
+
+def parse_period(value: str) -> Tuple[int, int, int]:
+    """(year, first month, last month) of '2027-Q4', 'Q4 2027', '2027-11', 'Nov 2027', '2027-11-30' or '2027'."""
+    found = _period(" ".join(str(value).replace(",", " ").split()).upper())
+    if found is None:
+        raise ValueError(f"unrecognised period {value!r}; write it as 2027-Q4, 2027-11, Nov 2027, 2027-11-30 or 2027")
+    if not MIN_YEAR <= found[0] <= MAX_YEAR:
+        raise ValueError(f"period {value!r} has a year outside {MIN_YEAR} to {MAX_YEAR}")
+    return found
+
+
+def period_end(period: str) -> date:
+    """The last day the period covers: the day itself when one is written, otherwise the end of the month, quarter or year."""
+    year, _, last = parse_period(period)
+    match = re.fullmatch(r"\d{4}-\d{1,2}-(\d{1,2})", str(period).strip())
+    last_day = monthrange(year, last)[1]
+    return date(year, last, min(int(match.group(1)), last_day) if match and int(match.group(1)) else last_day)
 
 
 def months_until(period: str, today: date, start: bool = False) -> int:

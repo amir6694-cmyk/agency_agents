@@ -12,6 +12,8 @@ from property_scout.listing import EVIDENCE
 from property_scout.messages import TEXT, render
 from property_scout.scoring import (
     ASSUMED_YIELD_LOSS,
+    BEHIND_SCHEDULE_GAP,
+    HELD_AT_CONSIDER,
     CONSIDER_SCORE,
     DEVELOPER_TIER_POINTS,
     EVIDENCE_POINTS,
@@ -73,6 +75,20 @@ def strong(today):
         "service_charge_psf": 15,
         "permit_number": "7100000001",
         "observed_on": today.isoformat(),
+    }
+
+
+@pytest.fixture
+def launch(strong):
+    """A well priced first sale in a registered project by a proven developer, its price confirmed."""
+    return {
+        **strong,
+        **OFFPLAN,
+        "handover": "2028-Q4",
+        "payment_plan": {"on_booking": 20, "on_handover": 80},
+        "developer_tier": 1,
+        "registration_verified": True,
+        "price_corroborated": True,
     }
 
 
@@ -199,6 +215,30 @@ class TestHardFilters:
     def test_a_deadline_does_not_touch_ready_homes(self, make_brief, make_listing, today):
         assert len(assess(make_brief(handover_by="2027-Q4"), [make_listing()], today).ranked) == 1
 
+    def test_a_register_date_that_has_lapsed_is_not_a_delivery_date(self, make_brief, make_listing, today):
+        brief = make_brief(handover_by="2027-Q4")
+        advert_later = make_listing(handover="2028-Q2", register_completion="2026-06", **OFFPLAN)
+        nothing_ahead = make_listing(register_completion="2026-06", **OFFPLAN)
+        assert self.reasons(assess(brief, [advert_later], today)) == {"reject.handover"}
+        undated = only(assess(brief, [nothing_ahead], today))
+        assert {"handover_unknown", "register_overdue"} <= flag_codes(undated)
+        assert criterion(undated, "fit").notes[0].code == "fit.handover_unknown"
+
+    def test_sale_type_can_be_limited(self, make_brief, make_listing, today):
+        resale = make_listing(completion="offplan", sale_type="resale")
+        assert self.reasons(assess(make_brief(sale_type="primary"), [resale], today)) == {"reject.sale_type"}
+        assert len(assess(make_brief(sale_type="primary"), [make_listing(sale_type=None)], today).ranked) == 1
+        assert len(assess(make_brief(sale_type="resale"), [resale], today).ranked) == 1
+
+    def test_an_exclusion_matches_a_word_in_the_community_name(self, make_brief, make_listing, today):
+        listing = make_listing(community="DAMAC Hills 2", building="Amargo")
+        assert self.reasons(assess(make_brief(exclude=["Damac"]), [listing], today)) == {"reject.excluded"}
+
+    def test_a_decorated_community_name_still_matches_the_area(self, make_brief, make_listing, today):
+        brief = make_brief(areas=["JVC", "Palm Jumeirah"], areas_strict=True)
+        for community in ("Jumeirah Village Circle (JVC)", "Jumeirah Village Circle, Dubai", "The Palm Jumeirah"):
+            assert len(assess(brief, [make_listing(community=community, building="A")], today).ranked) == 1, community
+
 
 class TestValue:
     def score_at(self, run, gap, **extra):
@@ -224,6 +264,16 @@ class TestValue:
         assert full.score == pytest.approx(100) and full.evidence == 1.0
         assert thin.score == pytest.approx(NEUTRAL + (100 - NEUTRAL) * PARTIAL) and thin.evidence == PARTIAL
         assert [note.code for note in thin.notes] == ["value.scored", "value.thin"]
+
+    def test_a_thin_benchmark_never_lifts_a_bad_score(self, run):
+        full = self.score_at(run, VALUE_WORST_GAP + 0.05)
+        thin = self.score_at(run, VALUE_WORST_GAP + 0.05, benchmark_count=None)
+        assert full.score == thin.score == 0 and thin.evidence == PARTIAL
+
+    def test_an_ask_exactly_at_the_worst_gap_counts_as_overpriced(self, run):
+        assessment = run(price_aed=2_400 * SIZE, size_sqft=SIZE, benchmark_psf=2_000, benchmark_count=MIN_COMPS)
+        assert assessment.benchmark_gap == VALUE_WORST_GAP
+        assert "overpriced" in flag_codes(assessment) and assessment.verdict == "pass"
 
     def test_thin_benchmark_is_flagged(self, run):
         assert "thin_benchmark" in flag_codes(run(**{**priced(0), "benchmark_count": MIN_COMPS - 1}))
@@ -263,6 +313,23 @@ class TestYield:
     def test_rent_resting_on_few_contracts_counts_for_half(self, run, count):
         result = criterion(run(annual_rent_aed=130_000, service_charge_psf=18, rent_count=count), "yield")
         assert [note.code for note in result.notes] == ["yield.net", "yield.thin"] and result.evidence == PARTIAL
+
+    def test_a_good_yield_on_thin_evidence_is_held_halfway_to_neutral(self, run):
+        rich = dict(price_aed=1_000_000, annual_rent_aed=95_000, service_charge_psf=10)
+        full = criterion(run(rent_count=MIN_COMPS, **rich), "yield").score
+        thin = criterion(run(rent_count=1, **rich), "yield").score
+        gross_only = criterion(run(price_aed=1_000_000, annual_rent_aed=95_000, rent_count=MIN_COMPS), "yield").score
+        assert full > NEUTRAL and thin == pytest.approx(NEUTRAL + (full - NEUTRAL) * PARTIAL)
+        assert NEUTRAL < gross_only < full
+
+    def test_without_a_fee_schedule_there_is_no_net_yield_to_state(self, run):
+        facts = dict(annual_rent_aed=130_000, service_charge_psf=18, rent_count=MIN_COMPS)
+        known = run(**facts)
+        unknown = run({"emirates": ["fujairah"]}, emirate="fujairah", **facts)
+        result = criterion(unknown, "yield")
+        assert unknown.net_yield is None and known.net_yield is not None
+        assert result.notes[0].code == "yield.costs_unknown" and result.evidence == PARTIAL
+        assert result.score < criterion(known, "yield").score
 
     def test_a_gross_figure_is_scored_as_an_estimated_net_and_counts_for_half(self, run):
         assessment = run(annual_rent_aed=130_000, rent_count=MIN_COMPS)
@@ -326,11 +393,25 @@ class TestFit:
         assert criterion(late, "fit").score == pytest.approx(100 - 6 * LATE_HANDOVER_PENALTY_PER_MONTH)
         assert "late_handover" in flag_codes(late) and "late_handover" not in flag_codes(on_time)
 
-    def test_an_undated_handover_is_neutral_and_flagged(self, run):
+    def test_an_undated_handover_is_neutral_unevidenced_and_flagged(self, run):
         assessment = run({"handover_by": "2027-Q4"}, **OFFPLAN)
         fit = criterion(assessment, "fit")
-        assert fit.score == NEUTRAL and fit.notes[0].code == "fit.handover_unknown"
+        assert fit.score == NEUTRAL and fit.evidence == 0 and fit.notes[0].code == "fit.handover_unknown"
         assert "handover_unknown" in flag_codes(assessment)
+
+    def test_a_finished_home_meets_any_deadline(self, run, strong):
+        assessment = run({"handover_by": "2027-Q4"}, **strong)
+        fit = criterion(assessment, "fit")
+        assert fit.score == 100 and fit.notes[0].code == "fit.handover_ok" and fit.evidence == 1
+        assert "handover_unknown" not in flag_codes(assessment) and assessment.verdict == "shortlist"
+
+    def test_a_missing_size_is_an_untested_minimum_not_a_passed_one(self, run):
+        brief = {"size_min_sqft": 1000, "areas": ["Dubai Marina"]}
+        stated = criterion(run(brief, size_sqft=800), "fit")
+        missing = criterion(run(brief, size_sqft=None), "fit")
+        assert stated.score == pytest.approx((100 + 0) / 2) and stated.evidence == 1
+        assert missing.score == pytest.approx((100 + NEUTRAL) / 2) and missing.evidence == 0.5
+        assert [note.code for note in missing.notes] == ["fit.area_hit", "fit.size_unknown"]
 
 
 class TestTrust:
@@ -349,10 +430,21 @@ class TestTrust:
         assert criterion(assessment, "trust").score == 100
         assert "no_permit" not in flag_codes(assessment)
 
-    def test_portal_verification_stands_in_for_the_permit_and_its_absence_is_noted(self, run, today):
+    def test_portal_verification_stands_in_for_the_permit(self, run, today):
         assessment = run(verified=True, observed_on=today.isoformat())
         assert criterion(assessment, "trust").score == 100
-        assert "no_permit" in flag_codes(assessment)
+        assert "no_permit" not in flag_codes(assessment)
+
+    def test_an_advert_with_neither_permit_nor_verification_is_noted(self, run):
+        assert "no_permit" in flag_codes(run())
+        assert "no_permit" not in flag_codes(run(sale_type="primary"))
+
+    def test_a_first_sale_is_checked_on_its_price_not_on_a_badge(self, run, today):
+        seen = today.isoformat()
+        badge = criterion(run(sale_type="primary", verified=True, permit_number="7100000009", observed_on=seen), "trust")
+        confirmed = criterion(run(sale_type="primary", price_corroborated=True, observed_on=seen), "trust")
+        assert badge.score == pytest.approx(200 / 3) and badge.notes[-1].code == "trust.uncorroborated"
+        assert confirmed.score == 100 and confirmed.notes[-1].code == "trust.corroborated"
 
     def test_an_advert_the_portal_did_not_verify_says_so(self, run):
         assert "trust.unverified" in [note.code for note in criterion(run(verified=False), "trust").notes]
@@ -390,7 +482,7 @@ class TestTrust:
         assert UNKNOWN_TIER_POINTS == min(DEVELOPER_TIER_POINTS.values())
 
     def test_a_fully_checked_off_plan_offer_is_fully_trusted(self, run, today):
-        facts = dict(developer_tier=1, registration_verified=True, verified=True, observed_on=today.isoformat())
+        facts = dict(developer_tier=1, registration_verified=True, price_corroborated=True, observed_on=today.isoformat())
         assert criterion(run(**facts, **OFFPLAN), "trust").score == 100
 
     def test_registration_states(self, run):
@@ -419,6 +511,29 @@ class TestTerms:
     def test_unknown_for_primary_off_plan_without_a_plan(self, run):
         terms = criterion(run(**OFFPLAN), "terms")
         assert terms.applicable and terms.score is None and terms.evidence == 0
+        assert terms.notes[0].code == "terms.no_plan"
+
+    def test_a_plan_deferring_to_an_undated_handover_says_what_is_missing(self, run):
+        terms = criterion(run(payment_plan={"on_booking": 20, "on_handover": 80}, **OFFPLAN), "terms")
+        assert terms.score is None and terms.notes[0].code == "terms.no_date"
+
+    def test_an_unstated_sale_type_is_costed_as_a_resale_and_not_scored_on_the_plan(self, run):
+        facts = dict(completion="offplan", sale_type=None, handover="2028-Q4", payment_plan={"on_booking": 20, "on_handover": 80}, transfer_fee_waived=True)
+        assessment = run(**facts)
+        terms = criterion(assessment, "terms")
+        assert terms.applicable and terms.score is None and terms.notes[0].code == "terms.sale_type_unknown"
+        assert {"sale_type_unknown", "waiver_unconfirmed"} <= flag_codes(assessment)
+        assert "waiver_ignored" not in flag_codes(assessment)
+        assert "cost.agency_fee" in {item.note.code for item in assessment.costs.items}
+        assert assessment.cash_at_booking is None
+
+    def test_a_post_handover_share_without_a_period_is_costed_as_due_on_handover(self, run):
+        with_period = run(handover="2027-Q4", payment_plan={"on_booking": 40, "post_handover": 60}, post_handover_months=36, **OFFPLAN)
+        without = run(handover="2027-Q4", payment_plan={"on_booking": 40, "post_handover": 60}, **OFFPLAN)
+        at_handover = run(handover="2027-Q4", payment_plan={"on_booking": 40, "on_handover": 60}, **OFFPLAN)
+        assert without.plan.deferral_benefit == pytest.approx(at_handover.plan.deferral_benefit)
+        assert without.plan.deferral_benefit < with_period.plan.deferral_benefit
+        assert "post_handover_undated" in flag_codes(without) and "post_handover_undated" not in flag_codes(with_period)
 
     def test_back_loaded_plan_scores_higher(self, run):
         def score(plan):
@@ -507,12 +622,78 @@ class TestVerdict:
         lead = run(evidence="lead", **strong)
         assert lead.verdict == "verify_first" and "unverified_lead" in flag_codes(lead)
 
-    def test_off_plan_is_not_shortlisted_until_its_registration_is_confirmed(self, run, strong):
-        facts = {**strong, **OFFPLAN, "handover": "2028-Q4", "developer_tier": 1, "payment_plan": {"on_booking": 20, "on_handover": 80}}
-        unchecked = run(**facts)
-        confirmed = run(registration_verified=True, **facts)
+    def test_off_plan_is_not_shortlisted_until_its_registration_is_confirmed(self, run, launch):
+        unchecked = run(**{**launch, "registration_verified": None})
+        confirmed = run(**launch)
         assert unchecked.score >= SHORTLIST_SCORE and unchecked.verdict == "consider"
         assert confirmed.verdict == "shortlist"
+
+    def test_leaving_out_the_completion_status_cannot_open_the_gate(self, run, launch):
+        """An unbuilt home recorded without its status keeps its off-plan checks and is never shortlisted."""
+        not_found = {**launch, "completion": None, "registration_verified": False, "developer_tier": 3}
+        hidden = run({"financing": "mortgage"}, **not_found)
+        assert hidden.verdict == "verify_first" and "registration_not_found" in flag_codes(hidden)
+        assert criterion(hidden, "trust").score == criterion(run(**{**not_found, "completion": "offplan"}), "trust").score
+        assert hidden.costs.loan == 0 and hidden.costs.loan_ignored
+        unstated = run(**{**launch, "completion": None})
+        assert unstated.score >= SHORTLIST_SCORE and unstated.verdict == "consider"
+        assert "completion_unknown" in flag_codes(unstated)
+
+    def test_a_ready_home_of_unstated_status_is_held_too(self, run, strong):
+        assessment = run(completion=None, **strong)
+        assert assessment.score >= SHORTLIST_SCORE and assessment.verdict == "consider"
+
+    @pytest.mark.parametrize(
+        "brief, listing, code",
+        [
+            ({"bedrooms_min": 1}, {"bedrooms": None}, "bedrooms_unknown"),
+            ({"bedrooms_max": 2}, {"bedrooms": None}, "bedrooms_unknown"),
+            ({"property_types": ["apartment"]}, {"property_type": None}, "type_unknown"),
+            ({"must_have": ["vacant"], "must_have_strict": True}, {}, "must_have_unmet"),
+            ({}, {"from_price": True}, "from_price"),
+        ],
+    )
+    def test_a_limit_that_could_not_be_tested_holds_the_offer_at_consider(self, run, strong, brief, listing, code):
+        assessment = run(brief, **{**strong, **listing})
+        assert code in HELD_AT_CONSIDER and code in flag_codes(assessment)
+        assert assessment.score >= SHORTLIST_SCORE and assessment.verdict == "consider"
+
+    def test_a_required_feature_that_is_evidenced_does_not_hold_the_offer(self, run, strong):
+        brief = {"must_have": ["vacant"], "must_have_strict": True}
+        assert run(brief, tags=["Vacant"], **strong).verdict == "shortlist"
+        soft = run({"must_have": ["vacant"]}, **strong)
+        assert "must_have_unmet" not in flag_codes(soft)
+
+    def test_an_undated_project_is_not_shortlisted_against_a_deadline(self, run, launch):
+        undated = run({"handover_by": "2029-Q4"}, **{**launch, "handover": None})
+        dated = run({"handover_by": "2029-Q4"}, **launch)
+        assert "handover_unknown" in flag_codes(undated) and undated.verdict != "shortlist"
+        assert dated.verdict == "shortlist"
+
+    def test_a_budget_that_must_cover_fees_is_untested_where_no_fees_are_known(self, run, strong):
+        brief = {"emirates": ["fujairah"], "budget_includes_costs": True}
+        assessment = run(brief, emirate="fujairah", **strong)
+        assert "budget_untested" in flag_codes(assessment) and assessment.verdict != "shortlist"
+        assert "budget_untested" not in flag_codes(run({"emirates": ["fujairah"]}, emirate="fujairah", **strong))
+
+    def test_a_first_sale_far_below_registered_sales_is_a_teaser_until_confirmed(self, run, launch):
+        teaser = run(**{**launch, "price_corroborated": None})
+        assert "teaser_price" in flag_codes(teaser) and teaser.verdict == "consider"
+        assert "teaser_price" not in flag_codes(run(**launch))
+        resale = run(**{**launch, "price_corroborated": None, "sale_type": "resale"})
+        modest = run(**{**launch, **priced(VALUE_BEST_GAP + 0.02), "price_corroborated": None})
+        assert "teaser_price" not in flag_codes(resale) and "teaser_price" not in flag_codes(modest)
+
+    def test_a_project_far_behind_its_registered_schedule_is_flagged(self, run, launch):
+        register = dict(register_started="2024-11", register_completion="2028-11", register_inspected_on="2026-11-01")
+        behind = run({"handover_by": "2028-Q4"}, **launch, register_progress_pct=10, **register)
+        on_pace = run({"handover_by": "2028-Q4"}, **launch, register_progress_pct=45, **register)
+        no_deadline = run(**launch, register_progress_pct=10, **register)
+        flag = next(flag for flag in behind.flags if flag.code == "behind_schedule")
+        assert flag.note.params["elapsed"] == pytest.approx(0.5, abs=0.02) and flag.note.params["built"] == 0.10
+        assert flag.note.params["elapsed"] - 0.10 > BEHIND_SCHEDULE_GAP
+        assert behind.verdict == "consider" and "behind_schedule" not in flag_codes(on_pace)
+        assert "behind_schedule" in flag_codes(no_deadline) and no_deadline.verdict == "shortlist"
 
     def test_a_tenanted_home_is_not_shortlisted_for_own_use(self, run, strong):
         brief = {"purpose": "end_use", "areas": ["Dubai Marina"]}
@@ -533,16 +714,21 @@ class TestVerdict:
     def test_an_analyst_cap_never_lifts_a_verdict(self, run):
         assert run(analyst_cap="consider", analyst_note="checked").verdict == "needs_data"
 
+    def test_an_analysts_pass_is_not_relabelled_as_a_data_gap(self, run):
+        assert run().verdict == "needs_data"
+        assert run(analyst_cap="pass", analyst_note="lease runs to 2029").verdict == "pass"
+
     def test_a_price_far_above_registered_sales_is_a_pass_whatever_else_is_good(self, run, strong):
         dear = {**strong, **priced(VALUE_WORST_GAP + 0.05)}
         assessment = run({"budget_max": 5_000_000, "weights": {"value": 0.1, "yield": 0, "fit": 0, "trust": 0.9, "terms": 0}}, **dear)
         assert assessment.score >= SHORTLIST_SCORE
         assert assessment.verdict == "pass" and "overpriced" in flag_codes(assessment)
 
-    def test_a_thin_benchmark_cannot_force_a_pass(self, run, strong):
+    def test_a_thin_benchmark_neither_forces_a_pass_nor_allows_a_shortlist(self, run, strong):
         dear = {**strong, **priced(VALUE_WORST_GAP + 0.05), "benchmark_count": MIN_COMPS - 1}
         assessment = run({"budget_max": 5_000_000, "weights": {"value": 0.1, "yield": 0, "fit": 0, "trust": 0.9, "terms": 0}}, **dear)
-        assert "overpriced" in flag_codes(assessment) and assessment.verdict == "shortlist"
+        assert assessment.score >= SHORTLIST_SCORE and "overpriced" in flag_codes(assessment)
+        assert assessment.verdict == "consider"
 
     def test_overpriced_low_yield_unit_is_a_pass(self, run):
         weak = run(price_aed=2_400_000, benchmark_psf=BENCHMARK, benchmark_count=MIN_COMPS, annual_rent_aed=70_000, rent_count=MIN_COMPS, service_charge_psf=30, verified=False)
@@ -568,10 +754,10 @@ class TestRanking:
 
     def test_verdicts_are_listed_in_order_with_unverified_offers_last(self, make_brief, make_listing, today, strong):
         listings = [
-            make_listing(url="https://a.example/lead", building="A", evidence="lead", **{**strong, "permit_number": "71"}),
+            make_listing(url="https://a.example/lead", building="A", evidence="lead", **{**strong, "permit_number": "7100000071"}),
             make_listing(url="https://a.example/blank", building="B"),
-            make_listing(url="https://a.example/card", building="C", evidence="card", **{**strong, "permit_number": "72"}),
-            make_listing(url="https://a.example/page", building="D", **{**strong, "permit_number": "73"}),
+            make_listing(url="https://a.example/card", building="C", evidence="card", **{**strong, "permit_number": "7100000072"}),
+            make_listing(url="https://a.example/page", building="D", **{**strong, "permit_number": "7100000073"}),
         ]
         ranked = assess(make_brief(), listings, today).ranked
         assert [a.verdict for a in ranked] == ["shortlist", "consider", "needs_data", "verify_first"]
@@ -626,6 +812,17 @@ class TestEmirateAndCosts:
         assessment = run(handover="2028-Q4", payment_plan={"on_booking": 20, "on_handover": 80}, **OFFPLAN)
         assert assessment.cash_at_booking == pytest.approx(assessment.listing.price_aed * 0.20 + assessment.costs.total_costs)
         assert run().cash_at_booking is None
+
+    def test_a_resale_shows_no_booking_figure_and_says_what_to_ask_the_seller(self, run):
+        resale = run(completion="offplan", sale_type="resale", handover="2028-Q4", payment_plan={"on_booking": 20, "on_handover": 80})
+        assert resale.cash_at_booking is None
+        assert {"resale_terms", "trustee_quote"} <= flag_codes(resale)
+
+    def test_a_loan_is_cut_to_the_ceiling_even_where_no_fees_are_published(self, run):
+        brief = {"emirates": ["fujairah"], "financing": "mortgage", "loan_to_value": LTV_CAP_INVESTMENT + 0.3}
+        assessment = run(brief, emirate="fujairah")
+        assert "ltv_capped" in flag_codes(assessment)
+        assert assessment.costs.own_funds == pytest.approx(assessment.listing.price_aed * (1 - LTV_CAP_INVESTMENT))
 
 
 class TestGoldenVisa:
@@ -725,12 +922,34 @@ class TestDuplicatesInAssessment:
         assert assessment.listing.url == "https://a.example/page"
         assert flag.note.params == {"price": 1_760_000} and flag.severity == "info"
 
-    def test_an_advert_outside_the_brief_is_rejected_before_folding(self, make_brief, make_listing, today):
-        inside = make_listing(url="https://a.example/in", price_aed=1_800_000)
+    def test_one_advert_over_budget_does_not_remove_a_unit_another_offers_within_it(self, make_brief, make_listing, today):
+        inside = make_listing(url="https://a.example/in", evidence="card", price_aed=1_800_000)
         outside = make_listing(url="https://a.example/out", price_aed=1_860_000)
         result = assess(make_brief(budget_max=1_820_000), [inside, outside], today)
-        assert only(result).duplicates == []
-        assert [r.listing.url for r in result.rejected] == ["https://a.example/out"]
+        assessment = only(result)
+        assert assessment.listing.url == "https://a.example/in" and result.rejected == []
+        assert [d.url for d in assessment.duplicates] == ["https://a.example/out"]
+
+    def test_a_unit_no_advert_offers_within_the_brief_is_rejected_once(self, make_brief, make_listing, today):
+        adverts = [make_listing(url="https://a.example/1", price_aed=1_900_000), make_listing(url="https://a.example/2", price_aed=1_860_000)]
+        result = assess(make_brief(budget_max=1_820_000), adverts, today)
+        assert result.ranked == [] and len(result.rejected) == 1 and result.received == 2
+
+    def test_what_any_advert_says_about_the_unit_is_tested_against_the_brief(self, make_brief, make_listing, today, strong):
+        """A tenancy one agent mentions and another leaves out belongs to the unit, whichever advert leads."""
+        silent = make_listing(url="https://a.example/silent", **strong)
+        candid = make_listing(url="https://b.example/candid", tags=["tenanted"], **{**strong, "price_aed": strong["price_aed"] * 1.02, "permit_number": None})
+        own_use = {"purpose": "end_use", "areas": ["Dubai Marina"]}
+        held = only(assess(make_brief(**own_use), [silent, candid], today))
+        assert held.verdict == "consider" and "tenanted" in flag_codes(held)
+        excluded = assess(make_brief(exclude=["tenanted"], **own_use), [silent, candid], today)
+        assert excluded.ranked == [] and len(excluded.rejected) == 1
+
+    def test_an_analysts_cap_on_any_advert_of_the_unit_holds_the_unit(self, make_brief, make_listing, today, strong):
+        clean = make_listing(url="https://a.example/clean", **strong)
+        capped = make_listing(url="https://b.example/capped", analyst_cap="verify_first", analyst_note="title deed names another unit", **{**strong, "price_aed": strong["price_aed"] * 1.02, "permit_number": None})
+        assessment = only(assess(make_brief(), [clean, capped], today))
+        assert assessment.verdict == "verify_first" and assessment.listing.url == "https://a.example/clean"
 
     def test_the_merged_offer_is_scored_on_what_every_advert_showed(self, make_brief, make_listing, today):
         bare = make_listing(url="https://a.example/1")
@@ -743,26 +962,32 @@ class TestMessages:
         plan = {"on_booking": 20, "during_construction": 40, "on_handover": 40}
         old = (today - timedelta(days=200)).isoformat()
         cases = [
-            ({"areas": ["Dubai Marina"], "must_have": ["sea view"], "size_min_sqft": 800, "purpose": "end_use", "budget_max": 1_850_000, "financing": "mortgage", "loan_to_value": 0.95, "resident": False, "first_home": False},
-             dict(benchmark_psf=BENCHMARK, benchmark_count=2, annual_rent_aed=120_000, service_charge_psf=16, verified=True, permit_number="7", observed_on="2026-11-10", listed_days_ago=200, tags=["tenanted"], building_sales_12m=2, transfer_fee_waived=True, analyst_cap="consider", analyst_note="view is of the car park")),
-            ({"handover_by": "2027-Q4", "handover_strict": False, "financing": "mortgage"},
-             dict(handover="2028-Q4", register_completion="2029-Q2", register_inspected_on=old, payment_plan=plan, developer_tier=3, registration_verified=False, annual_rent_aed=100_000, from_price=True, ready_benchmark_psf=1_000, transfer_fee_waived=True, **OFFPLAN)),
-            ({"handover_by": "2027-Q4"}, dict(developer_tier=1, registration_verified=True, **OFFPLAN)),
-            ({}, dict(handover="2026-Q1", **OFFPLAN)),
-            ({}, dict(register_completion="2026-Q1", register_progress_pct=80, **OFFPLAN)),
-            ({"emirates": []}, dict(emirate=None, completion=None, size_sqft=None, evidence="lead", observed_on="2027-01-01", verified=False)),
+            ({"areas": ["Dubai Marina"], "must_have": ["sea view"], "must_have_strict": True, "size_min_sqft": 800, "purpose": "end_use", "budget_max": 1_850_000, "financing": "mortgage", "loan_to_value": 0.95, "resident": False, "first_home": False},
+             dict(benchmark_psf=BENCHMARK, benchmark_count=2, annual_rent_aed=120_000, service_charge_psf=16, verified=True, permit_number="7100000007", observed_on="2026-11-10", listed_days_ago=200, tags=["tenanted"], building_sales_12m=2, transfer_fee_waived=True, analyst_cap="consider", analyst_note="view is of the car park")),
+            ({"handover_by": "2027-Q4", "handover_strict": False, "financing": "mortgage", "size_min_sqft": 800},
+             dict(handover="2028-Q4", register_completion="2029-Q2", register_started="2023-01", register_progress_pct=5, register_inspected_on=old, payment_plan=plan, developer_tier=3, registration_verified=False, annual_rent_aed=100_000, from_price=True, ready_benchmark_psf=1_000, transfer_fee_waived=True, size_sqft=None, **OFFPLAN)),
+            ({"handover_by": "2027-Q4"}, dict(developer_tier=1, registration_verified=True, price_corroborated=True, **OFFPLAN)),
+            ({}, dict(handover="2026-Q1", payment_plan={"on_booking": 20, "on_handover": 80}, ready_benchmark_psf=1_000, **OFFPLAN)),
+            ({}, dict(register_completion="2026-Q1", register_progress_pct=80, payment_plan={"on_booking": 40, "post_handover": 60}, **OFFPLAN)),
+            ({}, dict(payment_plan={"on_booking": 20, "on_handover": 80}, **OFFPLAN)),
+            ({}, dict(completion="offplan", sale_type=None, handover="2028-Q4", payment_plan=plan, transfer_fee_waived=True)),
+            ({}, dict(completion="offplan", sale_type="resale", handover="2028-Q4", payment_plan=plan)),
+            ({}, dict(handover="2028-Q4", payment_plan=plan, **OFFPLAN, **priced(-0.15))),
+            ({"emirates": [], "bedrooms_min": 1, "property_types": ["apartment"], "budget_includes_costs": True},
+             dict(emirate=None, completion=None, size_sqft=None, bedrooms=None, property_type=None, evidence="lead", observed_on="2027-01-01", verified=False, annual_rent_aed=100_000)),
             ({}, dict(evidence="card", annual_rent_aed=900_000, **priced(-0.5))),
             ({}, dict(annual_rent_aed=120_000, rent_count=9, service_charge_psf=15, observed_on=today.isoformat(), sale_type="primary", **priced(0.3))),
-            ({"emirates": ["sharjah"]}, dict(emirate="sharjah")),
+            ({"emirates": ["sharjah"]}, dict(emirate="sharjah", verified=True)),
             ({"emirates": ["fujairah"]}, dict(emirate="fujairah")),
+            ({"emirates": ["ajman"], "budget_max": 100_000}, dict(emirate="ajman", price_aed=50_000)),
             ({"emirates": ["abu_dhabi"]}, dict(emirate="abu_dhabi", community="Al Reem Island")),
             ({"emirates": ["abu_dhabi"]}, dict(emirate="abu_dhabi", community="Yas Island")),
             ({"purpose": "golden_visa", "budget_max": 5_000_000, "financing": "mortgage"}, dict(price_aed=2_050_000, size_sqft=1_000, benchmark_psf=1_800)),
             ({"budget_max": 1_000_000}, dict()),
             ({"budget_max": 1_850_000, "budget_includes_costs": True}, dict()),
             ({"budget_min": 2_000_000}, dict()),
-            ({"market": "offplan", "emirates": ["ajman"], "property_types": ["villa"], "bedrooms_min": 3}, dict()),
-            ({"bedrooms_max": 0, "areas": ["JVC"], "areas_strict": True, "exclude": ["marina"], "purpose": "golden_visa"}, dict()),
+            ({"market": "offplan", "sale_type": "primary", "emirates": ["ajman"], "property_types": ["villa"], "bedrooms_min": 3}, dict()),
+            ({"bedrooms_max": 0, "areas": ["JVC"], "areas_strict": True, "exclude": ["marina"], "purpose": "golden_visa", "budget_max": 5_000_000}, dict()),
             ({"handover_by": "2027-Q1"}, dict(handover="2028-Q1", **OFFPLAN)),
             ({"handover_by": "2027-Q4", "areas": ["Business Bay"]}, dict(handover="2027-Q2", verified=True, **OFFPLAN)),
         ]

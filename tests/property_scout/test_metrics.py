@@ -2,13 +2,26 @@ from datetime import date
 
 import pytest
 
-from property_scout.metrics import benchmark_gap, gross_yield, months_to_handover, net_yield, plan_cashflows, plan_value
+from property_scout.metrics import (
+    benchmark_gap,
+    expected_handover,
+    gross_yield,
+    months_to_handover,
+    net_yield,
+    plan_cashflows,
+    plan_value,
+    schedule_shortfall,
+)
 
 
 class TestBenchmarkGap:
     def test_negative_when_below_benchmark(self, make_listing):
         listing = make_listing(price_aed=1_500_000, size_sqft=750, benchmark_psf=2500)
         assert benchmark_gap(listing) == pytest.approx(-0.20)
+
+    def test_a_round_ratio_is_not_a_hair_under_itself(self, make_listing):
+        assert benchmark_gap(make_listing(price_aed=2_400 * 750, size_sqft=750, benchmark_psf=2_000)) == 0.2
+        assert benchmark_gap(make_listing(price_aed=1_400 * 750, size_sqft=750, benchmark_psf=2_000)) == -0.3
 
     def test_unknown_without_benchmark_or_size(self, make_listing):
         assert benchmark_gap(make_listing()) is None
@@ -34,6 +47,52 @@ class TestYields:
         assert net_yield(make_listing(**facts), 2_000_000, 0.10) is None
 
 
+class TestExpectedHandover:
+    def test_the_register_date_is_used_while_it_is_ahead(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2027-Q2", register_completion="2028-Q3")
+        assert expected_handover(listing, today) == "2028-Q3"
+
+    def test_a_lapsed_register_date_gives_way_to_a_later_advertised_one(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2028-Q2", register_completion="2026-06")
+        assert expected_handover(listing, today) == "2028-Q2"
+
+    def test_nothing_is_expected_once_every_stated_date_has_passed(self, make_listing, today):
+        assert expected_handover(make_listing(completion="offplan", handover="2026-Q1", register_completion="2026-06"), today) is None
+        assert expected_handover(make_listing(completion="offplan"), today) is None
+
+    def test_a_date_is_compared_to_the_day(self, make_listing, today):
+        earlier_this_month = today.replace(day=1).isoformat()
+        assert expected_handover(make_listing(completion="offplan", handover=earlier_this_month), today) is None
+        assert expected_handover(make_listing(completion="offplan", handover=today.isoformat()), today) == today.isoformat()
+        assert expected_handover(make_listing(completion="offplan", handover=today.strftime("%Y-%m")), today) is not None
+
+
+class TestScheduleShortfall:
+    register = dict(completion="offplan", register_started="2024-11", register_completion="2028-11", register_inspected_on="2026-11-01")
+
+    def test_compares_time_elapsed_with_the_share_built(self, make_listing):
+        elapsed, built = schedule_shortfall(make_listing(register_progress_pct=10, **self.register))
+        assert elapsed == pytest.approx(0.49, abs=0.01) and built == 0.10
+
+    @pytest.mark.parametrize("missing", ["register_started", "register_completion", "register_inspected_on", "register_progress_pct"])
+    def test_needs_both_ends_the_progress_and_its_date(self, make_listing, missing):
+        facts = {**self.register, "register_progress_pct": 10, missing: None}
+        assert schedule_shortfall(make_listing(**facts)) is None
+
+    def test_the_advertised_date_stands_in_for_a_missing_register_date(self, make_listing):
+        facts = {**self.register, "register_completion": None, "handover": "2028-11", "register_progress_pct": 10}
+        assert schedule_shortfall(make_listing(**facts))[0] == pytest.approx(0.49, abs=0.01)
+
+    def test_a_completion_date_before_the_start_gives_no_comparison(self, make_listing):
+        facts = {**self.register, "register_started": "2029-01", "register_progress_pct": 10}
+        assert schedule_shortfall(make_listing(**facts)) is None
+
+    def test_elapsed_time_is_kept_between_nothing_and_everything(self, make_listing):
+        late = {**self.register, "register_inspected_on": "2030-01-01", "register_progress_pct": 90}
+        early = {**self.register, "register_inspected_on": "2024-01-01", "register_progress_pct": 0}
+        assert schedule_shortfall(make_listing(**late))[0] == 1 and schedule_shortfall(make_listing(**early))[0] == 0
+
+
 class TestMonthsToHandover:
     def test_counts_to_the_start_of_the_period(self, make_listing, today):
         listing = make_listing(completion="offplan", handover="2028-Q4")
@@ -45,6 +104,10 @@ class TestMonthsToHandover:
 
     def test_a_past_date_is_now(self, make_listing, today):
         assert months_to_handover(make_listing(completion="offplan", handover="2026-Q1"), today) == 0
+
+    def test_a_lapsed_register_date_does_not_bring_the_handover_forward(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2028-Q4", register_completion="2026-06")
+        assert months_to_handover(listing, today) == 23
 
     def test_a_finished_unit_is_handed_over_now(self, make_listing, today):
         listing = make_listing(payment_plan={"on_booking": 60, "post_handover": 40}, post_handover_months=24)
@@ -74,6 +137,10 @@ class TestPaymentPlanValue:
         flows = plan_cashflows(listing, today)
         assert sum(share for _, share in flows) == pytest.approx(1.0)
         assert max(month for month, _ in flows) == 23 + 36
+
+    def test_a_post_handover_share_without_a_period_falls_due_on_handover(self, make_listing, today):
+        listing = make_listing(completion="offplan", handover="2027-11", payment_plan={"on_booking": 40, "post_handover": 60})
+        assert plan_cashflows(listing, today) == [(0, 0.4), (12, 0.6)]
 
     def test_paying_everything_today_is_worth_full_price(self, make_listing, today):
         value = plan_value(make_listing(payment_plan={"on_booking": 100}), today, 0.07)

@@ -7,22 +7,33 @@ from typing import Any, Dict, List, Optional
 
 from .costs import RATES_AS_OF
 from .messages import UI, aed, grouped, long_date, pct, render
-from .scoring import Assessment, Result
+from .metrics import expected_handover
+from .scoring import Assessment, Result, unbuilt
 
 PALETTE = {"page": "#FFFFFF", "text": "#111111", "mute": "#6B6B6B", "line": "#E2E2E2", "bar": "#333333"}
 SEVERITY_COLOUR = {"critical": "#B42318", "warning": "#111111", "info": "#6B6B6B"}
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]|])")
+# Characters that would end a Markdown <link> or start markup after it.
+_MD_LINK_UNSAFE = {"<": "%3C", ">": "%3E", " ": "%20", '"': "%22", "`": "%60", "\\": "%5C"}
 
 
 def _md(text: str) -> str:
     return _MD_SPECIAL.sub(r"\\\1", text).replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _md_link(url: str) -> str:
+    return "<" + "".join(_MD_LINK_UNSAFE.get(ch, ch) for ch in url) + ">"
+
+
 def _web(link: str) -> bool:
     return link.lower().startswith(("http://", "https://"))
 
 
-def _unit_line(a: Assessment, lang: str) -> str:
+def _money(value: Optional[float]) -> Optional[int]:
+    return None if value is None else round(value)
+
+
+def _unit_line(a: Assessment, as_of: date, lang: str) -> str:
     t = UI[lang]
     listing = a.listing
     parts: List[str] = []
@@ -34,8 +45,12 @@ def _unit_line(a: Assessment, lang: str) -> str:
         parts.append(f"{grouped(listing.size_sqft, lang)} {t['sqft']}")
     if listing.completion:
         parts.append(t[f"market.{listing.completion}"])
-    if listing.offplan and listing.scheduled_handover:
-        parts.append(f"{t['handover']} {listing.scheduled_handover}")
+    if unbuilt(listing):
+        if listing.sale_type:
+            parts.append(t[f"sale.{listing.sale_type}"])
+        handover = expected_handover(listing, as_of)
+        if handover:
+            parts.append(f"{t['handover']} {handover}")
     if listing.emirate:
         parts.append(t[f"emirate.{listing.emirate}"])
     if listing.developer:
@@ -62,6 +77,8 @@ def _register_line(a: Assessment, lang: str) -> str:
     parts: List[str] = []
     if listing.project_number:
         parts.append(f"{t['register_no']} {listing.project_number}")
+    if listing.register_started:
+        parts.append(f"{t['register_started']} {listing.register_started}")
     if listing.register_progress_pct is not None:
         parts.append(f"{t['register_built']} {listing.register_progress_pct:g}%")
     if listing.register_inspected_on:
@@ -74,8 +91,15 @@ def _register_line(a: Assessment, lang: str) -> str:
 
 
 def _other_adverts(a: Assessment) -> List[tuple]:
-    """Address and price of each folded advert; cards on one search page at one price read as one line."""
-    return list(dict.fromkeys((d.url, d.price_aed) for d in a.duplicates))
+    """Address, price and who advertised each folded advert; identical cards from one search page read as one line."""
+    return list(dict.fromkeys((d.url, d.price_aed, " · ".join(x for x in (d.agent, d.title) if x)) for d in a.duplicates))
+
+
+def _own_weights(a: Assessment, result: Result) -> Dict[str, float]:
+    """The weights this offer's score was computed with: those of the criteria that applied, rescaled to sum to one."""
+    live = {c.name: result.weights[c.name] for c in a.criteria if c.applicable and result.weights[c.name] > 0}
+    total = sum(live.values())
+    return {name: share / total for name, share in live.items()}
 
 
 def _share(value: Optional[float], lang: str, signed: bool = False) -> str:
@@ -97,6 +121,9 @@ def _figures(a: Assessment, lang: str) -> List[tuple]:
         figures.append((t["own_funds"], aed(a.costs.own_funds, lang)))
     if a.cash_at_booking is not None:
         figures.append((t["cash_at_booking"], aed(a.cash_at_booking, lang)))
+    if unbuilt(listing) and listing.price_psf and listing.ready_benchmark_psf:
+        premium = pct(listing.price_psf / listing.ready_benchmark_psf - 1, signed=True, lang=lang)
+        figures.append((t["ready_premium"], premium))
     if listing.building_sales_12m is not None:
         figures.append((t["sales_12m"], str(listing.building_sales_12m)))
     return figures
@@ -154,14 +181,14 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
                 "score": a.score,
                 "completeness": a.confidence,
                 "price_aed": a.listing.price_aed,
-                "price_psf": a.listing.price_psf,
+                "price_psf": _money(a.listing.price_psf),
                 "benchmark_gap": a.benchmark_gap,
                 "gross_yield": a.gross_yield,
                 "net_yield": a.net_yield,
-                "total_outlay_aed": a.costs.total_outlay,
-                "own_funds_aed": a.costs.own_funds if a.costs.loan else None,
+                "total_outlay_aed": _money(a.costs.total_outlay),
+                "own_funds_aed": _money(a.costs.own_funds) if a.costs.loan else None,
                 "loan_to_value_used": a.costs.ltv_used,
-                "cash_at_booking_aed": a.cash_at_booking,
+                "cash_at_booking_aed": _money(a.cash_at_booking),
                 "plan_present_value_ratio": a.plan.present_value_ratio if a.plan else None,
                 "criteria": [
                     {
@@ -169,7 +196,7 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
                         "score": None if c.score is None else round(c.score, 1),
                         "applicable": c.applicable,
                         "evidence": c.evidence,
-                        "weight": result.weights[c.name],
+                        "weight": _own_weights(a, result).get(c.name, 0.0),
                         "basis": "; ".join(render(n, lang) for n in c.notes),
                     }
                     for c in a.criteria
@@ -177,9 +204,10 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
                 "flags": [
                     {"severity": f.severity, "code": f.code, "message": render(f.note, lang)} for f in a.flags
                 ],
-                "costs": [{"item": render(i.note, lang), "amount_aed": i.amount} for i in a.costs.items],
+                "costs": [{"item": render(i.note, lang), "amount_aed": _money(i.amount)} for i in a.costs.items],
                 "duplicates": [
-                    {"url": d.url, "price_aed": d.price_aed, "evidence": d.evidence, "agent": d.agent} for d in a.duplicates
+                    {"url": d.url, "price_aed": d.price_aed, "evidence": d.evidence, "agent": d.agent, "title": d.title}
+                    for d in a.duplicates
                 ],
                 "notes": a.listing.notes,
                 "sources": a.listing.sources,
@@ -222,7 +250,7 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
         ]
         if listing.title:
             lines.append(f"«{_md(listing.title)}»")
-        lines += [_md(line) for line in (_unit_line(a, lang), _advert_line(a, lang), _register_line(a, lang)) if line]
+        lines += [_md(line) for line in (_unit_line(a, result.as_of, lang), _advert_line(a, lang), _register_line(a, lang)) if line]
         lines.append("")
         lines += [f"- {name}: {value}" for name, value in _figures(a, lang)]
         for c in a.criteria:
@@ -233,17 +261,17 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
             lines.append(f"- **{t['severity.' + f.severity]}** — {_md(render(f.note, lang))}")
         if listing.notes:
             lines.append(f"- {t['notes']}: {_md(listing.notes)}")
-        lines.append(f"- {t['open_' + listing.evidence]}: <{listing.url}>")
-        for url, price in _other_adverts(a):
-            lines.append(f"- {t['also_listed']}: <{url}> ({aed(price, lang)})")
+        lines.append(f"- {t['open_' + listing.evidence]}: {_md_link(listing.url)}")
+        for url, price, who in _other_adverts(a):
+            lines.append(f"- {t['also_listed']}: {_md_link(url)} ({aed(price, lang)}{', ' + _md(who) if who else ''})")
         for name, link in listing.sources.items():
-            lines.append(f"- {t['sources']}, {_md(name)}: {'<' + link + '>' if _web(link) else _md(link)}")
+            lines.append(f"- {t['sources']}, {_md(name)}: {_md_link(link) if _web(link) else _md(link)}")
         lines.append("")
     if result.rejected:
         lines += [f"## {t['rejected_title']}", ""]
         for r in result.rejected:
             reasons = "; ".join(render(n, lang) for n in r.reasons)
-            lines.append(f"- {_md(r.listing.label)}, {aed(r.listing.price_aed, lang)}: {_md(reasons)} — <{r.listing.url}>")
+            lines.append(f"- {_md(r.listing.label)}, {aed(r.listing.price_aed, lang)}: {_md(reasons)} — {_md_link(r.listing.url)}")
         lines.append("")
     weights = " · ".join(f"{t['criterion.' + name]} {share:.0%}" for name, share in _shown_weights(result).items())
     lines += [f"## {t['method']}", "", t["method_text"].format(rates_as_of=RATES_AS_OF), "", f"{t['weights']}: {weights}", ""]
@@ -302,7 +330,7 @@ def _card(index: int, a: Assessment, result: Result, lang: str) -> str:
         shown = t["unknown"] if c.score is None else f"{c.score:.0f}"
         basis = escape("; ".join(render(n, lang) for n in c.notes))
         rows.append(
-            f"<tr><td class='k'>{t['criterion.' + c.name]}<div class='small'>{result.weights[c.name]:.0%}</div></td>"
+            f"<tr><td class='k'>{t['criterion.' + c.name]}<div class='small'>{_own_weights(a, result).get(c.name, 0):.0%}</div></td>"
             f"<td>{basis}<div class='bar'><i style='width:{c.score or 0:.0f}%'></i></div></td><td class='n'>{shown}</td></tr>"
         )
     costs = "".join(
@@ -315,11 +343,19 @@ def _card(index: int, a: Assessment, result: Result, lang: str) -> str:
     )
     lines = "".join(
         f"<div class='unit'>{escape(line)}</div>"
-        for line in (f"«{listing.title}»" if listing.title else "", _unit_line(a, lang), _advert_line(a, lang), _register_line(a, lang))
+        for line in (
+            f"«{listing.title}»" if listing.title else "",
+            _unit_line(a, result.as_of, lang),
+            _advert_line(a, lang),
+            _register_line(a, lang),
+        )
         if line
     )
     links = [f"<li>{_link(listing.url, t['open_' + listing.evidence] + ' →')}</li>"]
-    links += [f"<li class='small'>{t['also_listed']}: {_link(url, url)} ({aed(price, lang)})</li>" for url, price in _other_adverts(a)]
+    links += [
+        f"<li class='small'>{t['also_listed']}: {_link(url, url)} ({aed(price, lang)}{', ' + escape(who) if who else ''})</li>"
+        for url, price, who in _other_adverts(a)
+    ]
     links += [
         f"<li class='small'>{t['sources']}, {escape(name)}: {_link(link, link) if _web(link) else escape(link)}</li>"
         for name, link in listing.sources.items()

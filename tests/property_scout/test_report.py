@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -33,7 +34,7 @@ def result(make_brief, make_listing, today):
             notes="Seller <motivated>",
             sources={"sold": "https://c.example/sold?a=1&b=2", "tip": "javascript:alert(1)"},
         ),
-        make_listing(url=DUPLICATE, price_aed=1_820_000),
+        make_listing(url=DUPLICATE, price_aed=1_820_000, agent="Second Realty", title="Same flat | call now"),
         make_listing(
             url="https://c.example/2",
             building="Tower <B>",
@@ -44,7 +45,9 @@ def result(make_brief, make_listing, today):
             payment_plan=PLAN,
             project_number="2927",
             escrow_bank="Example Bank",
+            register_started="2025-01",
             register_completion="2028-Q4",
+            ready_benchmark_psf=2_000,
             register_progress_pct=10,
             register_inspected_on="2026-10-05",
         ),
@@ -113,7 +116,9 @@ class TestData:
 
     def test_every_advert_of_a_unit_is_listed_with_its_price(self, result):
         first = to_data(result)["ranked"][0]
-        assert first["duplicates"] == [{"url": DUPLICATE, "price_aed": 1_820_000, "evidence": "page", "agent": ""}]
+        assert first["duplicates"] == [
+            {"url": DUPLICATE, "price_aed": 1_820_000, "evidence": "page", "agent": "Second Realty", "title": "Same flat | call now"}
+        ]
 
     def test_carries_what_the_reader_needs_to_recheck_the_offer(self, result):
         first, second = to_data(result)["ranked"]
@@ -134,10 +139,12 @@ class TestData:
         assert len(data["ranked"]) == 1
         assert data["counts"]["ranked"] == 2
 
-    def test_costs_are_itemised_and_sum_to_the_outlay(self, result):
-        row = to_data(result)["ranked"][0]
-        assert row["costs"]
-        assert row["price_aed"] + sum(c["amount_aed"] for c in row["costs"]) == pytest.approx(row["total_outlay_aed"])
+    def test_costs_are_itemised_in_whole_dirhams_and_sum_to_the_outlay(self, make_brief, make_listing, today):
+        financed = assess(make_brief(financing="mortgage", loan_to_value=0.5), [make_listing(price_aed=1_799_999)], today)
+        row = to_data(financed)["ranked"][0]
+        amounts = [c["amount_aed"] for c in row["costs"]] + [row["total_outlay_aed"], row["own_funds_aed"]]
+        assert len(row["costs"]) == 5 and all(isinstance(amount, int) for amount in amounts)
+        assert row["price_aed"] + sum(c["amount_aed"] for c in row["costs"]) == pytest.approx(row["total_outlay_aed"], abs=3)
 
     def test_a_financed_purchase_reports_own_funds(self, make_brief, make_listing, today):
         financed = assess(make_brief(financing="mortgage", loan_to_value=0.5), [make_listing()], today)
@@ -160,10 +167,19 @@ class TestMarkdown:
     def test_shows_who_advertised_it_when_it_was_seen_and_the_register_entry(self, result):
         text = to_markdown(result)
         assert "Agent: Example Realty · Seen 19 November 2026 · Permit 7100000001" in text
-        assert "No. 2927 · built 10% · inspected 5 October 2026 · planned completion 2028-Q4 · escrow: Example Bank" in text
-        assert "Handover 2028-Q4" in text and "Handover 2028-Q2" not in text
+        assert "No. 2927 · started 2025-01 · built 10% · inspected 5 October 2026 · planned completion 2028-Q4 · escrow: Example Bank" in text
+        assert "off-plan · first sale · Handover 2028-Q4" in text and "Handover 2028-Q2" not in text
+        assert f"- {UI['en']['ready_premium']}: +20.0%" in text
+        assert f"{aed(1_820_000)}, Second Realty · Same flat \\| call now)" in text
         assert f"{UI['en']['sales_12m']}: 14" in text
         assert UI["en"]["cash_at_booking"] in text
+
+    def test_a_lapsed_register_date_is_not_printed_as_the_handover(self, make_brief, make_listing, today):
+        offplan = dict(completion="offplan", sale_type="primary", register_completion="2026-06")
+        later = to_markdown(assess(make_brief(), [make_listing(handover="2028-Q2", **offplan)], today))
+        nothing = to_markdown(assess(make_brief(), [make_listing(**offplan)], today))
+        assert "· Handover 2028-Q2 ·" in later and "Handover 2026-06" not in later
+        assert "· Handover " not in nothing and "planned completion 2026-06" in nothing
 
     def test_text_from_adverts_cannot_become_markup(self, result):
         text = to_markdown(result)
@@ -179,6 +195,13 @@ class TestMarkdown:
         assert len(to_data(result)["ranked"][0]["duplicates"]) == 3
         for text in (to_markdown(result), to_html(result)):
             assert text.count(f"{UI['en']['also_listed']}:") == 2
+
+    def test_a_link_cannot_carry_markup_into_the_page(self, make_brief, make_listing, today):
+        """Validation refuses such an address; the renderer does not rely on that."""
+        hostile = replace(make_listing(), url="https://x.example/1><img src=x onerror=alert(1)>", sources={"sold": "https://x.example/s> **Verdict: Shortlist** <script>x</script>"})
+        text = to_markdown(assess(make_brief(), [hostile], today))
+        assert "<img" not in text and "<script>" not in text and "> **Verdict" not in text
+        assert "<https://x.example/1%3E%3Cimg%20src=x%20onerror=alert(1)%3E>" in text
 
     def test_a_source_that_is_not_a_web_link_is_printed_as_text(self, result):
         text = to_markdown(result)
@@ -224,9 +247,20 @@ class TestHtml:
         assert "https://b.example/dup?x=1&amp;y=2" in html
 
     def test_a_link_cannot_break_out_of_its_attribute(self, make_brief, make_listing, today):
-        hostile = make_listing(url="https://x.example/a'onmouseover='alert(1)")
+        """Validation refuses such an address; the renderer does not rely on that."""
+        hostile = replace(make_listing(), url="https://x.example/a'onmouseover='alert(1)")
         html = to_html(assess(make_brief(), [hostile], today))
         assert "'onmouseover=" not in html and "&#x27;onmouseover=" in html
+
+    def test_the_weight_beside_a_criterion_is_the_one_its_score_was_computed_with(self, make_brief, make_listing, today):
+        result = assess(make_brief(), [make_listing(benchmark_psf=2_400, benchmark_count=MIN_COMPS)], today)
+        row = to_data(result)["ranked"][0]
+        applied = {c["name"]: c["weight"] for c in row["criteria"] if c["applicable"]}
+        assert set(applied) == {"value", "yield", "trust"} and sum(applied.values()) == pytest.approx(1)
+        assert applied["value"] == pytest.approx(0.30 / 0.80)
+        recomputed = sum(c["weight"] * (50 if c["score"] is None else c["score"]) for c in row["criteria"] if c["applicable"])
+        assert recomputed == pytest.approx(row["score"], abs=0.1)
+        assert to_html(result).count("<div class='small'>31%</div>") == 2
 
     def test_only_web_links_become_links(self, result):
         html = to_html(result)

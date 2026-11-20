@@ -91,10 +91,13 @@ class TestDubai:
         assert set(got) == {"cost.transfer_fee", "cost.registration_fee"}
         assert got["cost.registration_fee"] == self.schedule.fixed_offplan
 
-    def test_off_plan_resale_pays_trustee_and_agency_on_the_off_plan_fixed_fee(self):
-        got = amounts(cost(completion="offplan", sale_type="resale"))
-        assert set(got) == {"cost.transfer_fee", "cost.registration_fee", "cost.trustee_fee", "cost.agency_fee"}
+    def test_off_plan_resale_leaves_out_the_trustee_fee_nobody_publishes(self):
+        costs = cost(completion="offplan", sale_type="resale")
+        got = amounts(costs)
+        assert set(got) == {"cost.transfer_fee", "cost.registration_fee", "cost.agency_fee"}
         assert got["cost.registration_fee"] == self.schedule.fixed_offplan
+        assert costs.trustee_quote_needed and flags(costs) == {"trustee_quote": "info"}
+        assert not cost().trustee_quote_needed and not cost(completion="offplan", sale_type="primary").trustee_quote_needed
 
     def test_unknown_sale_type_is_costed_as_a_resale(self):
         assert amounts(cost(sale_type=None)) == amounts(cost(sale_type="resale"))
@@ -116,12 +119,13 @@ class TestWaiver:
         assert waived.waived_rate == self.rate and full.waived_rate == 0
         assert not waived.waiver_ignored
 
-    @pytest.mark.parametrize("sale_type", ["resale", None])
-    def test_a_waiver_on_anything_but_a_primary_sale_is_ignored_and_flagged(self, sale_type):
+    @pytest.mark.parametrize("sale_type, code", [("resale", "waiver_ignored"), (None, "waiver_unconfirmed")])
+    def test_a_waiver_on_anything_but_a_first_sale_is_charged_and_flagged_for_what_it_is(self, sale_type, code):
         costs = cost(sale_type=sale_type, waived=True)
         assert amounts(costs)["cost.transfer_fee"] == pytest.approx(PRICE * self.rate)
-        assert costs.waiver_ignored and costs.waived_rate == 0
-        assert flags(costs)["waiver_ignored"] == "warning"
+        assert costs.waived_rate == 0
+        assert (costs.waiver_ignored, costs.waiver_unconfirmed) == (sale_type == "resale", sale_type is None)
+        assert flags(costs) == {code: "warning"}
 
 
 class TestLending:
@@ -250,15 +254,17 @@ class TestNorthernEmirates:
         assert national["cost.transfer_fee"] == pytest.approx(PRICE * schedule.transfer_rate_reduced)
         assert schedule.transfer_rate_reduced < schedule.transfer_rate
 
-    def test_ajman_minimum_fee_applies_to_small_purchases(self):
+    def test_ajman_minimum_fee_applies_to_small_purchases_and_is_labelled_as_one(self):
         schedule = SCHEDULES["ajman"]
         price = schedule.transfer_minimum / schedule.transfer_rate / 2
-        assert amounts(cost("ajman", price=price))["cost.transfer_fee"] == schedule.transfer_minimum
+        assert amounts(cost("ajman", price=price)) == {"cost.transfer_fee_minimum": schedule.transfer_minimum, "cost.registration_fee": schedule.fixed_ready}
+        at_the_threshold = schedule.transfer_minimum / schedule.transfer_rate
+        assert "cost.transfer_fee" in amounts(cost("ajman", price=at_the_threshold))
 
     def test_ajman_nationals_have_their_own_lower_minimum(self):
         schedule = SCHEDULES["ajman"]
         price = schedule.transfer_minimum_reduced / schedule.transfer_rate_reduced / 2
-        fee = amounts(cost("ajman", price=price, nationality="gcc"))["cost.transfer_fee"]
+        fee = amounts(cost("ajman", price=price, nationality="gcc"))["cost.transfer_fee_minimum"]
         assert fee == schedule.transfer_minimum_reduced
         assert 0 < schedule.transfer_minimum_reduced < schedule.transfer_minimum
 
@@ -269,7 +275,29 @@ class TestNorthernEmirates:
         assert costs.loan == pytest.approx(PRICE * 0.5)
 
 
+class TestLendingWithoutASchedule:
+    @pytest.mark.parametrize("emirate", ["fujairah", "umm_al_quwain", None])
+    def test_the_ceiling_applies_whatever_the_emirate_publishes(self, emirate):
+        costs = cost(emirate, financing="mortgage", loan_to_value=LTV_CAP_INVESTMENT + 0.3)
+        assert costs.loan == pytest.approx(PRICE * LTV_CAP_INVESTMENT) and costs.loan_capped
+        assert costs.own_funds == pytest.approx(PRICE * (1 - LTV_CAP_INVESTMENT)) and costs.items == []
+        assert "ltv_capped" in flags(costs, emirate)
+
+    def test_off_plan_is_still_costed_without_a_loan(self):
+        costs = cost("fujairah", completion="offplan", sale_type="primary", financing="mortgage")
+        assert costs.loan == 0 and costs.loan_ignored
+
+
 class TestCostFlags:
+    def test_a_waived_fee_in_abu_dhabi_is_not_also_described_as_charged_in_full(self):
+        costs = cost("abu_dhabi", completion="offplan", sale_type="primary", waived=True)
+        assert amounts(costs)["cost.transfer_fee_waived"] == 0
+        assert not costs.split_by_default and flags(costs, "abu_dhabi") == {}
+
+    @pytest.mark.parametrize("community", ["Al Reem Island (Abu Dhabi)", "The Al Reem Island", "Al Reem Island, Abu Dhabi"])
+    def test_a_decorated_island_name_is_still_the_island(self, community):
+        assert cost("abu_dhabi", community=community).seller_pays_transfer
+
     def test_a_missing_emirate_and_a_missing_schedule_are_told_apart(self):
         assert flags(cost(None), None) == {"emirate_missing": "warning"}
         assert flags(cost("fujairah"), "fujairah") == {"cost_rates_unknown": "warning"}

@@ -1,7 +1,17 @@
 import pytest
 
-from property_scout.dedupe import PRICE_TOLERANCE, SHARED_FACTS, SIZE_TOLERANCE, TRACKING_PARAMETERS, canonical_url, dedupe
-from property_scout.listing import Listing
+from property_scout.dedupe import (
+    CONFLICTING_TAGS,
+    PRICE_TOLERANCE,
+    SHARED_FACTS,
+    SIZE_TOLERANCE,
+    TRACKING_PARAMETERS,
+    canonical_url,
+    dedupe,
+    fold,
+    represent,
+)
+from property_scout.listing import ANALYST_CAPS, Listing
 
 
 def urls(groups):
@@ -20,8 +30,11 @@ class TestCanonicalUrl:
     def test_ignores_tracking_parameters(self, parameter):
         assert canonical_url(f"https://portal.example/listing/1?{parameter}=x") == canonical_url("https://portal.example/listing/1")
 
-    def test_keeps_the_parameters_that_name_the_page(self):
-        assert canonical_url("https://portal.example/listing?id=1") != canonical_url("https://portal.example/listing?id=2")
+    @pytest.mark.parametrize("parameter", ["id", "ref", "source", "unit"])
+    def test_keeps_the_parameters_that_name_the_page(self, parameter):
+        assert canonical_url(f"https://portal.example/listing?{parameter}=1") != canonical_url(f"https://portal.example/listing?{parameter}=2")
+
+    def test_parameter_order_does_not_matter(self):
         assert canonical_url("https://portal.example/listing?b=2&a=1") == canonical_url("https://portal.example/listing?a=1&b=2&cb=9")
 
     def test_keeps_routes_carried_in_the_fragment(self):
@@ -30,9 +43,24 @@ class TestCanonicalUrl:
 
 class TestSameUnit:
     def test_two_pages_with_one_address_are_one_unit(self, make_listing):
-        groups = dedupe([make_listing(), make_listing(url="https://www.portal.example/listing/1?ref=agent")])
+        groups = dedupe([make_listing(), make_listing(url="https://www.portal.example/listing/1?utm_source=agent")])
         assert len(groups) == 1
-        assert folded(groups) == {"https://portal.example/listing/1": ["https://www.portal.example/listing/1?ref=agent"]}
+        assert folded(groups) == {"https://portal.example/listing/1": ["https://www.portal.example/listing/1?utm_source=agent"]}
+
+    def test_a_lead_and_the_page_it_led_to_are_one_unit(self, make_listing):
+        lead = make_listing(evidence="lead", building=None, size_sqft=None)
+        page = make_listing()
+        again = make_listing(evidence="lead", building=None, size_sqft=None)
+        assert len(dedupe([lead, page, again])) == 1
+
+    def test_an_advert_that_omits_the_completion_status_still_folds(self, make_listing):
+        (merged, duplicates), = dedupe([make_listing(permit_number="7100000001"), make_listing(url="https://a.example/2", permit_number="7100000001", completion=None)])
+        assert len(duplicates) == 1 and merged.completion == "ready"
+
+    def test_a_community_written_the_short_way_is_the_same_community(self, make_listing):
+        long = make_listing(community="Jumeirah Village Circle", building="Bloom Towers")
+        short = make_listing(url="https://a.example/2", community="JVC", building="Bloom Towers")
+        assert len(dedupe([long, short])) == 1
 
     def test_cards_sharing_a_search_page_are_not_merged_on_the_link(self, make_listing):
         search = "https://portal.example/buy/dubai/1-bedroom-apartments-for-sale-dubai-marina.html?pt=2000000"
@@ -66,6 +94,7 @@ class TestSameUnit:
         first = make_listing(url="https://a.example/1", building=None, property_type="villa", permit_number="7100000001")
         second = make_listing(url="https://b.example/2", building=None, property_type="villa", permit_number="7100000001")
         assert len(dedupe([first, second])) == 1
+        assert len(dedupe([first, make_listing(url="https://b.example/3", building=None, property_type="villa", permit_number="7100000002")])) == 2
 
 
 class TestDifferentUnits:
@@ -87,10 +116,30 @@ class TestDifferentUnits:
     def test_different_bathrooms(self, make_listing):
         assert len(dedupe([make_listing(bathrooms=1), make_listing(url="https://a.example/2", bathrooms=2)])) == 2
 
-    def test_tenanted_and_vacant_are_different_units(self, make_listing):
-        assert len(dedupe([make_listing(tags=["tenanted"]), make_listing(url="https://a.example/2", tags=["vacant"])])) == 2
+    @pytest.mark.parametrize("group", CONFLICTING_TAGS)
+    def test_tags_one_unit_cannot_carry_together_keep_adverts_apart(self, make_listing, group):
+        for one in group:
+            for other in group:
+                listings = [make_listing(tags=[one]), make_listing(url="https://a.example/2", tags=[other])]
+                assert len(dedupe(listings)) == (1 if one == other else 2), (one, other)
 
-    @pytest.mark.parametrize("missing", ["bedrooms", "building", "size_sqft"])
+    def test_flats_on_different_floors_of_one_stack_are_not_one_flat(self, make_listing):
+        high = make_listing(tags=["high_floor"], price_aed=1_850_000)
+        low = make_listing(url="https://a.example/2", tags=["low_floor"], size_sqft=752)
+        unmarked = make_listing(url="https://a.example/3", price_aed=1_820_000)
+        assert len(dedupe([high, low])) == 2
+        assert len(dedupe([low, unmarked])) == 1
+
+    def test_a_different_emirate_is_a_different_unit(self, make_listing):
+        dubai = make_listing(community=None, building="The Residences")
+        abu_dhabi = make_listing(url="https://a.example/2", emirate="abu_dhabi", community=None, building="The Residences")
+        assert len(dedupe([dubai, abu_dhabi])) == 2
+
+    def test_a_building_name_alone_does_not_identify_a_unit(self, make_listing):
+        listings = [make_listing(community=None), make_listing(url="https://a.example/2", community=None)]
+        assert len(dedupe(listings)) == 2
+
+    @pytest.mark.parametrize("missing", ["bedrooms", "building", "size_sqft", "community"])
     def test_a_missing_fact_never_merges(self, make_listing, missing):
         listings = [make_listing(**{missing: None}), make_listing(url="https://a.example/2", **{missing: None})]
         assert len(dedupe(listings)) == 2
@@ -125,13 +174,40 @@ class TestMerging:
         assert [d.url for d in duplicates] == ["https://b.example/2"]
 
     def test_the_representative_advert_is_never_overwritten(self, make_listing):
-        anchor = make_listing(url="https://a.example/1", benchmark_psf=2300, permit_number="71")
-        other = make_listing(url="https://b.example/2", price_aed=1_820_000, benchmark_psf=2600, permit_number="72", agent="Other Realty")
+        anchor = make_listing(url="https://a.example/1", benchmark_psf=2300, permit_number="7100000071")
+        other = make_listing(url="https://b.example/2", price_aed=1_820_000, benchmark_psf=2600, permit_number="7100000072", agent="Other Realty")
         (merged, _), = dedupe([anchor, other])
-        assert merged.benchmark_psf == 2300 and merged.permit_number == "71" and merged.agent == ""
+        assert merged.benchmark_psf == 2300 and merged.permit_number == "7100000071" and merged.agent == ""
+
+    def test_a_card_gets_the_size_bedrooms_and_building_its_page_showed(self, make_listing):
+        page = make_listing(url="https://a.example/page", price_aed=1_840_000, permit_number="7100000001")
+        card = make_listing(url="https://a.example/search", evidence="card", permit_number="7100000001", size_sqft=None, bedrooms=None, building=None, benchmark_psf=2_400, benchmark_count=7)
+        group, = fold([card, page])
+        as_card = represent(group, 1)
+        assert as_card.evidence == "card" and as_card.price_aed == 1_800_000
+        assert (as_card.size_sqft, as_card.bedrooms, as_card.building) == (750, 1, "Marina Gate 1")
+        assert represent(group).benchmark_psf == 2_400
+
+    def test_notes_and_sources_of_every_advert_are_kept(self, make_listing):
+        first = make_listing(notes="Seller abroad", sources={"sold": "https://a.example/sold"})
+        second = make_listing(url="https://b.example/2", price_aed=1_820_000, notes="Lease ends March 2027", sources={"rent": "https://a.example/rent", "sold": "https://b.example/other"})
+        (merged, _), = dedupe([first, second])
+        assert merged.notes == "Seller abroad | Lease ends March 2027"
+        assert merged.sources == {"sold": "https://a.example/sold", "rent": "https://a.example/rent"}
+
+    @pytest.mark.parametrize("strict, mild", [("verify_first", "pass"), ("verify_first", "consider"), ("pass", "consider")])
+    def test_the_strictest_analyst_cap_in_the_group_applies_to_the_unit(self, make_listing, strict, mild):
+        assert ANALYST_CAPS.index(strict) > ANALYST_CAPS.index(mild)
+        adverts = [
+            make_listing(analyst_cap=mild, analyst_note="mild reason"),
+            make_listing(url="https://b.example/2", price_aed=1_820_000, analyst_cap=strict, analyst_note="strict reason"),
+            make_listing(url="https://c.example/3", price_aed=1_830_000),
+        ]
+        (merged, _), = dedupe(adverts)
+        assert (merged.analyst_cap, merged.analyst_note) == (strict, "strict reason")
 
     def test_facts_of_one_advert_are_not_shared(self):
-        own = {"url", "price_aed", "evidence", "agent", "permit_number", "verified", "observed_on", "listed_days_ago", "title"}
+        own = {"url", "price_aed", "evidence", "agent", "permit_number", "verified", "observed_on", "listed_days_ago", "title", "price_corroborated", "from_price"}
         assert not own & set(SHARED_FACTS)
         assert set(SHARED_FACTS) <= set(Listing.__dataclass_fields__)
 

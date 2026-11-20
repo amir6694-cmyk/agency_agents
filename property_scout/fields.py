@@ -6,8 +6,11 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Type
 
 MAX_TEXT = 600
-_CONTROL = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
-_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$")
+LONG_TEXT = 2000
+MAX_NUMBER = 1e12
+# Line breaks, control and bidirectional-override characters, and lone surrogates.
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
+_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 
 
 class InputError(ValueError):
@@ -22,26 +25,27 @@ class Check:
     def fail(self, name: str, problem: str, value: Any) -> InputError:
         return self.error(f"{self.where}: {name} {problem}, got {value!r}")
 
-    def text(self, name: str, value: Any) -> str:
+    def text(self, name: str, value: Any, limit: int = MAX_TEXT) -> str:
         if value is None:
             return ""
         if not isinstance(value, str):
             raise self.fail(name, "must be text", value)
         if _CONTROL.search(value):
             raise self.fail(name, "must be one line of text without control characters", value)
-        if len(value) > MAX_TEXT:
-            raise self.error(f"{self.where}: {name} is longer than {MAX_TEXT} characters")
+        if len(value) > limit:
+            raise self.error(f"{self.where}: {name} is longer than {limit} characters")
         return value.strip()
 
-    def number(self, name: str, value: Any, low: float = 0.0, high: float = math.inf, open_low: bool = True) -> Optional[float]:
+    def number(self, name: str, value: Any, low: float = 0.0, high: float = MAX_NUMBER, open_low: bool = True) -> Optional[float]:
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise self.fail(name, "must be a number, not text", value)
-        if not math.isfinite(value) or value > high or value < low or (open_low and value == low):
+        # An integer too large for a float cannot be tested with isfinite.
+        outside = isinstance(value, int) and abs(value) > MAX_NUMBER
+        if outside or not math.isfinite(value) or value > high or value < low or (open_low and value == low):
             sign = ">" if open_low else ">="
-            limit = f" and <= {high:g}" if math.isfinite(high) else ""
-            raise self.fail(name, f"must be a number {sign} {low:g}{limit}", value)
+            raise self.fail(name, f"must be a number {sign} {low:g} and <= {high:g}", "a very large number" if outside else value)
         return value
 
     def integer(self, name: str, value: Any, low: int, high: int) -> Optional[int]:
@@ -80,7 +84,7 @@ class Check:
     def day(self, name: str, value: Any) -> Optional[str]:
         if value is None or value == "":
             return None
-        match = _ISO_DATE.match(value) if isinstance(value, str) else None
+        match = _ISO_DATE.fullmatch(value) if isinstance(value, str) else None
         if match:
             try:
                 return date(*(int(part) for part in match.groups())).isoformat()
