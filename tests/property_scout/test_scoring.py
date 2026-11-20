@@ -152,6 +152,11 @@ class TestHardFilters:
         listing = make_listing(community="Jumeirah Village Circle", building="Bloom Towers")
         assert len(assess(make_brief(areas=["JVC"], areas_strict=True), [listing], today).ranked) == 1
 
+    @pytest.mark.parametrize("area", ["Park Heights", "Acacia B"])
+    def test_an_area_may_name_a_sub_community_or_a_building(self, make_brief, make_listing, today, area):
+        listing = make_listing(community="Dubai Hills Estate", sub_community="Park Heights", building="Acacia B")
+        assert len(assess(make_brief(areas=[area], areas_strict=True), [listing], today).ranked) == 1
+
     def test_an_area_is_not_matched_on_a_shared_word(self, make_brief, make_listing, today):
         listing = make_listing(community="Dubai Hills Estate", building="Park Heights")
         result = assess(make_brief(areas=["Dubai Marina"], areas_strict=True), [listing], today)
@@ -406,6 +411,10 @@ class TestTerms:
     def test_not_applicable_to_a_finished_home_sold_without_a_plan(self, run):
         terms = criterion(run(sale_type="primary"), "terms")
         assert terms.applicable is False and terms.notes[0].code == "terms.na"
+
+    def test_a_finished_home_sold_by_the_developer_on_a_plan_is_scored(self, run):
+        terms = criterion(run(sale_type="primary", payment_plan={"on_booking": 60, "post_handover": 40}, post_handover_months=40), "terms")
+        assert terms.applicable and 0 < terms.score < 100
 
     def test_unknown_for_primary_off_plan_without_a_plan(self, run):
         terms = criterion(run(**OFFPLAN), "terms")
@@ -691,6 +700,11 @@ class TestOtherFlags:
         order = [SEVERITIES.index(flag.severity) for flag in assessment.flags]
         assert order == sorted(order) and len(set(order)) == len(SEVERITIES)
 
+    def test_a_note_about_costs_does_not_come_before_a_later_warning(self, run):
+        brief = {"emirates": ["abu_dhabi"], "financing": "mortgage", "resident": False}
+        codes = [flag.code for flag in run(brief, emirate="abu_dhabi", community="Yas Island").flags]
+        assert codes.index("non_resident_finance") < codes.index("transfer_split")
+
 
 class TestDuplicatesInAssessment:
     def test_duplicates_are_folded_and_reported(self, make_brief, make_listing, today):
@@ -698,6 +712,10 @@ class TestDuplicatesInAssessment:
         assert result.received == 2
         assert [d.url for d in only(result).duplicates] == ["https://b.example/9"]
         assert "advertised_lower" not in flag_codes(only(result))
+
+    def test_an_advert_at_the_same_price_is_not_called_cheaper(self, make_brief, make_listing, today):
+        result = assess(make_brief(), [make_listing(), make_listing(url="https://b.example/9")], today)
+        assert len(only(result).duplicates) == 1 and "advertised_lower" not in flag_codes(only(result))
 
     def test_a_cheaper_advert_of_weaker_evidence_is_pointed_out(self, make_brief, make_listing, today):
         page = make_listing(url="https://a.example/page")

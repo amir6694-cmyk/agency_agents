@@ -92,6 +92,10 @@ class TestFormatting:
         assert "квартира" in russian and "Дубай" in russian and "750 кв.\u00a0футов" in russian
         assert "apartment" in english and "Dubai" in english
 
+    def test_sizes_are_grouped_in_the_report_language(self, make_brief, make_listing, today):
+        result = assess(make_brief(), [make_listing(size_sqft=1_250)], today)
+        assert "1\u00a0250 кв.\u00a0футов" in to_markdown(result, "ru") and "1,250 sqft" in to_markdown(result, "en")
+
     def test_the_colours_are_plain_black_on_white(self):
         assert PALETTE["page"] == "#FFFFFF" and PALETTE["text"] == "#111111"
 
@@ -194,6 +198,11 @@ class TestMarkdown:
         assert UI["en"]["criterion.trust"] in weights
         assert UI["en"]["criterion.terms"] not in weights and UI["en"]["criterion.fit"] not in weights
 
+    def test_criteria_that_do_not_apply_are_not_listed(self, make_brief, make_listing, today):
+        text = to_markdown(assess(make_brief(), [make_listing()], today))
+        assert f"- {UI['en']['criterion.trust']} " in text
+        assert UI["en"]["criterion.terms"] not in text and UI["en"]["criterion.fit"] not in text
+
     def test_empty_ranking_says_so(self, make_brief, today):
         text = to_markdown(assess(make_brief(), [], today))
         assert UI["en"]["none_ranked"] in text and UI["en"]["criterion.terms"] in text
@@ -228,6 +237,11 @@ class TestHtml:
         html = to_html(result, "ru")
         assert "Example Realty" in html and "7100000001" in html and "19.11.2026" in html
         assert "2927" in html and "Example Bank" in html and "05.10.2026" in html
+
+    def test_a_source_that_is_not_a_link_is_escaped_too(self, make_brief, make_listing, today):
+        listing = make_listing(sources={"tip": "<img src=x onerror=alert(1)>"})
+        html = to_html(assess(make_brief(), [listing], today))
+        assert "<img" not in html and "&lt;img src=x onerror=alert(1)&gt;" in html
 
     def test_is_self_contained(self, result):
         html = to_html(result)

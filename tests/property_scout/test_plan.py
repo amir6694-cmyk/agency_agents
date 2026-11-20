@@ -106,6 +106,10 @@ class TestOtherSteps:
         assert parts.path == "/en/new-projects/lp/ras-al-khaimah/al-marjan-island"
         assert parse_qs(parts.query) == {"pf": ["1000000"], "pt": ["2500000"], "t": [str(NEW_PROJECT_TYPE_ID["villa"])], "cs": ["off_plan"]}
 
+    def test_new_projects_are_not_narrowed_to_the_first_of_several_types(self, make_brief):
+        brief = make_brief(market="offplan", property_types=["villa", "townhouse"])
+        assert "t" not in parse_qs(urlsplit(steps(search_plan(brief), "new_projects")[0]["url"]).query)
+
     def test_no_step_pages_through_filtered_results(self, make_brief):
         for step in search_plan(make_brief(areas=["Dubai Marina"], bedrooms_min=1)):
             assert "page=" not in step.get("url", "")

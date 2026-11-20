@@ -110,6 +110,11 @@ class TestConcentration:
         assert summarise(rows, today).largest_project_share == CONCENTRATION_LIMIT
         assert not summarise(rows, today).concentrated
 
+    def test_the_share_is_of_all_rows_used_not_of_the_named_ones(self, today):
+        rows = [row(1_500_000, 750, project="A")] * 2 + [row(1_500_000, 750)] * 4
+        summary = summarise(rows, today)
+        assert summary.largest_project_share == pytest.approx(2 / 6) and not summary.concentrated
+
     def test_unknown_when_rows_do_not_name_their_project(self, today):
         assert summarise([row(1_500_000, 750)] * 6, today).largest_project_share is None
 
