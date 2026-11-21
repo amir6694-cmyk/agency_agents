@@ -56,6 +56,8 @@ class TestPlaces:
             ("Jumeirah Village Circle (JVC)", "jumeirah village circle"),
             ("Jumeirah Village Circle, Dubai", "jumeirah village circle"),
             ("The Palm Jumeirah", "palm jumeirah"),
+            ("The Marina", "dubai marina"),
+            ("The JVC, Dubai", "jumeirah village circle"),
             ("Business Bay, Dubai, UAE", "business bay"),
             ("(JLT)", "jumeirah lake towers"),
             ("Al Reem Island (Abu Dhabi)", "al reem island"),

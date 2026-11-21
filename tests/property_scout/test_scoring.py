@@ -40,6 +40,7 @@ from property_scout.scoring import (
     VERDICTS,
     VISA_MARGIN,
     assess,
+    unbuilt,
     weights_for,
 )
 
@@ -319,8 +320,10 @@ class TestYield:
         full = criterion(run(rent_count=MIN_COMPS, **rich), "yield").score
         thin = criterion(run(rent_count=1, **rich), "yield").score
         gross_only = criterion(run(price_aed=1_000_000, annual_rent_aed=95_000, rent_count=MIN_COMPS), "yield").score
+        low, high = NET_YIELD_RANGE
+        unheld = 100 * (0.095 - ASSUMED_YIELD_LOSS - low) / (high - low)
         assert full > NEUTRAL and thin == pytest.approx(NEUTRAL + (full - NEUTRAL) * PARTIAL)
-        assert NEUTRAL < gross_only < full
+        assert unheld > NEUTRAL and gross_only == pytest.approx(NEUTRAL + (unheld - NEUTRAL) * PARTIAL)
 
     def test_without_a_fee_schedule_there_is_no_net_yield_to_state(self, run):
         facts = dict(annual_rent_aed=130_000, service_charge_psf=18, rent_count=MIN_COMPS)
@@ -638,6 +641,28 @@ class TestVerdict:
         unstated = run(**{**launch, "completion": None})
         assert unstated.score >= SHORTLIST_SCORE and unstated.verdict == "consider"
         assert "completion_unknown" in flag_codes(unstated)
+
+    @pytest.mark.parametrize(
+        "clue",
+        [
+            {"handover": "2028-Q4"},
+            {"register_completion": "2028-Q4"},
+            {"developer_tier": 2},
+            {"project_number": "2927"},
+            {"registration_verified": True},
+            {"registration_verified": False},
+            {"payment_plan": {"on_booking": 50, "during_construction": 50}},
+            {"payment_plan": {"on_booking": 50, "on_handover": 50}},
+        ],
+    )
+    def test_any_fact_only_an_unbuilt_home_has_marks_it_as_unbuilt(self, make_listing, clue):
+        assert unbuilt(make_listing(completion=None, **clue))
+        assert not unbuilt(make_listing(completion="ready", **clue))
+
+    def test_a_home_of_unstated_status_with_no_such_fact_is_not_assumed_unbuilt(self, make_listing):
+        assert not unbuilt(make_listing(completion=None))
+        assert not unbuilt(make_listing(completion=None, payment_plan={"on_booking": 60, "post_handover": 40}, post_handover_months=24))
+        assert unbuilt(make_listing(completion="offplan"))
 
     def test_a_ready_home_of_unstated_status_is_held_too(self, run, strong):
         assessment = run(completion=None, **strong)

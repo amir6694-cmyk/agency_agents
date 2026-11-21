@@ -131,9 +131,11 @@ class TestDifferentUnits:
         assert len(dedupe([low, unmarked])) == 1
 
     def test_a_different_emirate_is_a_different_unit(self, make_listing):
-        dubai = make_listing(community=None, building="The Residences")
-        abu_dhabi = make_listing(url="https://a.example/2", emirate="abu_dhabi", community=None, building="The Residences")
+        dubai = make_listing(community="Marina", building="The Residences")
+        abu_dhabi = make_listing(url="https://a.example/2", emirate="abu_dhabi", community="Marina", building="The Residences")
+        unstated = make_listing(url="https://a.example/3", emirate=None, community="Marina", building="The Residences")
         assert len(dedupe([dubai, abu_dhabi])) == 2
+        assert len(dedupe([dubai, unstated])) == 1
 
     def test_a_building_name_alone_does_not_identify_a_unit(self, make_listing):
         listings = [make_listing(community=None), make_listing(url="https://a.example/2", community=None)]
