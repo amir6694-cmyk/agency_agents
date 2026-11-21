@@ -48,17 +48,21 @@ def expected_handover(listing: Listing, today: date) -> Optional[str]:
     return None
 
 
-def schedule_shortfall(listing: Listing) -> Optional[Tuple[float, float]]:
-    """(share of the construction period elapsed when inspected, share built), when the register gives both ends."""
+def schedule_shortfall(listing: Listing, today: date) -> Optional[Tuple[float, float]]:
+    """(share of the construction period elapsed, share built), when the register gives both ends.
+
+    Elapsed time is counted to the inspection the progress figure comes from, or to today when its date is not known.
+    """
     finish = listing.register_completion or listing.handover
-    if not (listing.register_started and finish and listing.register_progress_pct is not None and listing.register_inspected_on):
+    if not (listing.register_started and finish and listing.register_progress_pct is not None):
         return None
     start_year, start_month, _ = parse_period(listing.register_started)
     start = date(start_year, start_month, 1)
     total = (period_end(finish) - start).days
     if total <= 0:
         return None
-    elapsed = (date.fromisoformat(listing.register_inspected_on) - start).days / total
+    measured = date.fromisoformat(listing.register_inspected_on) if listing.register_inspected_on else today
+    elapsed = (measured - start).days / total
     return min(max(elapsed, 0.0), 1.0), listing.register_progress_pct / 100
 
 

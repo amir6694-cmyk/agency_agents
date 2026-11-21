@@ -689,11 +689,39 @@ class TestVerdict:
         soft = run({"must_have": ["vacant"]}, **strong)
         assert "must_have_unmet" not in flag_codes(soft)
 
+    on_pace = dict(register_started="2026-01", register_completion="2028-Q4", register_progress_pct=35, register_inspected_on="2026-11-01")
+
     def test_an_undated_project_is_not_shortlisted_against_a_deadline(self, run, launch):
         undated = run({"handover_by": "2029-Q4"}, **{**launch, "handover": None})
-        dated = run({"handover_by": "2029-Q4"}, **launch)
+        dated = run({"handover_by": "2029-Q4"}, **launch, **self.on_pace)
         assert "handover_unknown" in flag_codes(undated) and undated.verdict != "shortlist"
         assert dated.verdict == "shortlist"
+
+    @pytest.mark.parametrize("missing", ["register_completion", "register_started", "register_progress_pct"])
+    def test_a_deadline_met_only_on_an_unchecked_date_does_not_shortlist(self, run, launch, missing):
+        facts = {**launch, **self.on_pace, missing: None}
+        assessment = run({"handover_by": "2029-Q4"}, **facts)
+        assert "schedule_unconfirmed" in flag_codes(assessment) and assessment.verdict == "consider"
+        no_deadline = run(**facts)
+        assert "schedule_unconfirmed" not in flag_codes(no_deadline) and no_deadline.verdict == "shortlist"
+
+    def test_the_schedule_check_does_not_need_the_inspection_date(self, run, launch):
+        facts = {**launch, **self.on_pace, "register_inspected_on": None}
+        assert run({"handover_by": "2029-Q4"}, **facts).verdict == "shortlist"
+
+    @pytest.mark.parametrize(
+        "gap, code",
+        [("benchmark_psf", "no_benchmark"), ("size_sqft", "size_missing"), ("annual_rent_aed", "no_rent"), ("sale_type", "sale_type_unknown")],
+    )
+    def test_an_offer_is_not_shortlisted_without_what_it_would_be_judged_on(self, run, strong, gap, code):
+        assessment = run(**{**strong, gap: None})
+        assert code in HELD_AT_CONSIDER and code in flag_codes(assessment)
+        assert assessment.verdict in ("consider", "needs_data") and run(**strong).verdict == "shortlist"
+
+    def test_rent_is_not_asked_of_a_buyer_who_will_live_there(self, run, strong):
+        own_use = {"purpose": "end_use", "areas": ["Dubai Marina"]}
+        assessment = run(own_use, **{**strong, "annual_rent_aed": None})
+        assert "no_rent" not in flag_codes(assessment) and assessment.verdict == "shortlist"
 
     def test_a_budget_that_must_cover_fees_is_untested_where_no_fees_are_known(self, run, strong):
         brief = {"emirates": ["fujairah"], "budget_includes_costs": True}
@@ -713,6 +741,7 @@ class TestVerdict:
         register = dict(register_started="2024-11", register_completion="2028-11", register_inspected_on="2026-11-01")
         behind = run({"handover_by": "2028-Q4"}, **launch, register_progress_pct=10, **register)
         on_pace = run({"handover_by": "2028-Q4"}, **launch, register_progress_pct=45, **register)
+        assert on_pace.verdict == "shortlist"
         no_deadline = run(**launch, register_progress_pct=10, **register)
         flag = next(flag for flag in behind.flags if flag.code == "behind_schedule")
         assert flag.note.params["elapsed"] == pytest.approx(0.5, abs=0.02) and flag.note.params["built"] == 0.10
@@ -918,7 +947,7 @@ class TestOtherFlags:
         assert "low_turnover" not in flag_codes(run())
 
     def test_flags_are_listed_most_severe_first(self, run):
-        assessment = run({"financing": "mortgage"}, evidence="lead", registration_verified=False, developer_tier=3, **OFFPLAN)
+        assessment = run({"financing": "mortgage"}, evidence="lead", registration_verified=False, developer_tier=3, building_sales_12m=2, **OFFPLAN)
         order = [SEVERITIES.index(flag.severity) for flag in assessment.flags]
         assert order == sorted(order) and len(set(order)) == len(SEVERITIES)
 

@@ -70,6 +70,7 @@ SEVERITIES = ("critical", "warning", "info")
 HELD_AT_CONSIDER = (
     "card_only", "registration_unchecked", "tenanted", "completion_unknown", "bedrooms_unknown", "type_unknown",
     "handover_unknown", "budget_untested", "must_have_unmet", "teaser_price", "overpriced", "from_price",
+    "no_benchmark", "size_missing", "sale_type_unknown", "no_rent", "schedule_unconfirmed",
 )
 
 
@@ -405,7 +406,15 @@ def cost_flags(costs: CostBreakdown, emirate: Optional[str]) -> List[Flag]:
     return flags
 
 
-def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[float], gross: Optional[float], today: date) -> List[Flag]:
+def _flags(
+    brief: Brief,
+    listing: Listing,
+    costs: CostBreakdown,
+    gap: Optional[float],
+    gross: Optional[float],
+    weighs_income: bool,
+    today: date,
+) -> List[Flag]:
     flags: List[Flag] = []
 
     def add(severity: str, code: str, **params) -> None:
@@ -436,6 +445,12 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("warning", "completion_unknown")
     if listing.size_sqft is None:
         add("warning", "size_missing")
+    elif listing.benchmark_psf is None:
+        add("warning", "no_benchmark")
+    if gross is None and weighs_income:
+        add("warning", "no_rent")
+    if listing.sale_type is None:
+        add("warning", "sale_type_unknown")
     if listing.bedrooms is None and (brief.bedrooms_min is not None or brief.bedrooms_max is not None):
         add("warning", "bedrooms_unknown")
     if listing.property_type is None and brief.property_types:
@@ -453,8 +468,6 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
             add("warning", "registration_unchecked")
         if listing.developer_tier == 3:
             add("warning", "developer_unproven")
-        if listing.sale_type is None:
-            add("warning", "sale_type_unknown")
         if listing.price_psf and listing.ready_benchmark_psf:
             premium = listing.price_psf / listing.ready_benchmark_psf - 1
             if premium > OFFPLAN_PREMIUM_LIMIT:
@@ -466,9 +479,11 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         if listing.register_completion and listing.handover:
             if months_until(listing.register_completion, today) > months_until(listing.handover, today):
                 add("warning", "handover_mismatch", advert=listing.handover, register=listing.register_completion)
-        pace = schedule_shortfall(listing)
+        pace = schedule_shortfall(listing, today)
         if pace and pace[0] - pace[1] > BEHIND_SCHEDULE_GAP:
             add("warning", "behind_schedule", elapsed=pace[0], built=pace[1])
+        if brief.handover_by and expected_handover(listing, today) and not (listing.register_completion and pace):
+            add("warning", "schedule_unconfirmed")
         late = _months_late(brief, listing, today)
         if late is not None and late > 0:
             add("warning", "late_handover", handover=expected_handover(listing, today), late=late, wanted=brief.handover_by)
@@ -497,8 +512,6 @@ def _flags(brief: Brief, listing: Listing, costs: CostBreakdown, gap: Optional[f
         add("info", "costs_exceed_budget", outlay=costs.total_outlay)
     if listing.emirate in PERMIT_EMIRATES and not primary and not listing.permit_number and not listing.verified:
         add("info", "no_permit")
-    if listing.benchmark_psf is None and listing.size_sqft is not None:
-        add("info", "no_benchmark")
     if building and listing.annual_rent_aed is not None:
         add("info", "projected_rent")
     if listing.payment_plan.get("post_handover") and not listing.post_handover_months:
@@ -551,7 +564,7 @@ def assess_one(brief: Brief, listing: Listing, costs: CostBreakdown, weights: Di
         score = sum(weights[c.name] * (NEUTRAL if c.score is None else c.score) for c in live) / total
         confidence = sum(weights[c.name] * c.evidence for c in live) / total
     score, confidence = round(score, 1), round(confidence, 2)
-    flags = _flags(brief, listing, costs, gap, gross, today)
+    flags = _flags(brief, listing, costs, gap, gross, weights["yield"] > 0, today)
     return Assessment(
         listing=listing,
         score=score,
