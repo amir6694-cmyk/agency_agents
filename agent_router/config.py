@@ -8,6 +8,8 @@ import yaml
 from typing import Dict, List, Optional
 from .errors import AgentConfigError
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 class AgentConfig:
     """Loads and manages agent configuration"""
@@ -110,7 +112,10 @@ class AgentConfig:
         if not isinstance(agent['keywords'], list) or len(agent['keywords']) == 0:
             raise AgentConfigError(f"Agent {agent['name']} must have keywords list")
 
-        # Validate file path
+        # Relative paths are anchored at the project root, not the caller's cwd
+        if not os.path.isabs(agent['file_path']):
+            agent['file_path'] = os.path.join(PROJECT_ROOT, agent['file_path'])
+
         if not os.path.exists(agent['file_path']):
             raise AgentConfigError(f"Agent file not found: {agent['file_path']}")
 

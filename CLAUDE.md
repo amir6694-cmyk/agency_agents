@@ -2,13 +2,14 @@
 
 ## Repository Overview
 
-This repository is an **intelligent agent routing and tooling system** with three main components:
+This repository is an **intelligent agent routing and tooling system** with four main components:
 
 1. **`agent_router/`** — Routes tasks to the appropriate specialized agent via keyword scoring
 2. **`second_brain/`** — Persistent JSON-backed knowledge store for cross-session agent memory
 3. **`hackingtool/`** — CLI security research framework (WHOIS, DNS, port scanning, crypto, OSINT, CTF, forensics)
+4. **`property_scout/`** — Deterministic underwriting and ranking engine for UAE property listings, called by the UAE Property Scout agent
 
-It also contains **`agents/`**, a library of 55 Claude agent definition markdown files (41 registered in `agents.yaml`), and **`protocols/`**, mandatory development workflow documentation.
+It also contains **`agents/`**, a library of 56 Claude agent definition markdown files (42 registered in `agents.yaml`), and **`protocols/`**, mandatory development workflow documentation.
 
 ---
 
@@ -43,11 +44,27 @@ agency_agents/
 │       ├── ctf/            # CipherTools (caesar, vigenere, morse, xor), PatternSearch
 │       └── forensics/      # FileAnalyzer, SteganographyDetector
 │
+├── property_scout/         # UAE property underwriting engine (stdlib-only runtime)
+│   ├── fields.py           # Type checks for input JSON: a wrong value is named, never coerced
+│   ├── text.py             # Normalisation, place aliases, period parsing
+│   ├── brief.py            # Brief dataclass: budget, market, purpose, areas, buyer, weights
+│   ├── listing.py          # Listing dataclass: one advert, with its evidence level and register facts
+│   ├── costs.py            # Fee schedules by emirate, lending ceilings, acquisition_costs()
+│   ├── metrics.py          # Benchmark gap, yields, payment-plan present value
+│   ├── comps.py            # Median price per sqft from raw registered-sale rows
+│   ├── dedupe.py           # Folds the same unit advertised several times
+│   ├── scoring.py          # Hard filters, five criteria, flags, verdicts, ranking
+│   ├── messages.py         # Every sentence the engine says, in English and Russian
+│   ├── plan.py             # Brief -> the portal pages and queries to open
+│   ├── report.py           # JSON, Markdown and self-contained HTML output
+│   └── cli.py              # `property-scout` entry point
+│
 ├── agents/                 # Claude agent personality definition files (.md)
 │   ├── design/             # 6 agents (UI Designer, UX Architect, UX Researcher, etc.)
 │   ├── engineering/        # 7 agents (Senior Developer [default], Frontend, Backend, AI, etc.)
 │   ├── marketing/          # 8 agents (Content Creator, Social Media, TikTok, Reddit, etc.)
 │   ├── product/            # 3 agents (Sprint Prioritizer, Feedback Synthesizer, Trend Researcher)
+│   ├── real-estate/        # 1 agent (UAE Property Scout)
 │   ├── project-management/ # 5 agents (Project Shepherd, Experiment Tracker, Studio Producer, etc.)
 │   ├── security/           # 3 agents (CTF Specialist, OSINT Analyst, Penetration Tester)
 │   ├── spatial-computing/  # 6 agents (visionOS, XR Immersive, XR Interface, XR Cockpit, macOS Metal, Terminal)
@@ -55,6 +72,7 @@ agency_agents/
 │   ├── support/            # 6 agents (Analytics, Finance, Legal, Infrastructure, etc.)
 │   └── testing/            # 7 agents (Reality Checker, API Tester, Performance, etc.)
 │
+├── .claude/agents/         # Agents installed for Claude Code (uae-property-scout.md, a copy of the source)
 ├── .github/workflows/      # CI: ci.yml (narrow gate, see Continuous Integration)
 │
 ├── protocols/              # Mandatory workflow documentation
@@ -63,9 +81,9 @@ agency_agents/
 │   ├── TEST-FIRST-DEVELOPMENT.md          # TDD standards (352 lines)
 │   └── GIT-WORKFLOW-PROTOCOL.md           # Git hygiene (4 mandatory checks)
 │
-├── tests/                  # Pytest test suite (9 .py files + 7 hackingtool module tests)
+├── tests/                  # Pytest test suite (9 .py files + hackingtool/ and property_scout/ module tests)
 ├── templates/              # project-brief-template.md
-├── setup.py                # Package config (v0.3.0, Python >=3.8)
+├── setup.py                # Package config (v0.4.0, Python >=3.9)
 ├── conftest.py             # Root: adds project root to sys.path
 ├── batch_test_agents.py    # Utility: batch-test routing for specific agents
 ├── CONTRIBUTING.md         # Contribution guidelines
@@ -88,7 +106,7 @@ pip install PyYAML>=6.0
 pip install -r requirements-hackingtool.txt
 ```
 
-Python requirement: **>=3.8**. Use a virtual environment — activate it before running any commands.
+Python requirement: **>=3.9**. Use a virtual environment — activate it before running any commands.
 
 ---
 
@@ -96,7 +114,7 @@ Python requirement: **>=3.8**. Use a virtual environment — activate it before 
 
 ```bash
 # Full test suite with coverage
-pytest tests/ -v --cov=agent_router --cov=second_brain --cov=hackingtool
+pytest tests/ -v --cov=agent_router --cov=second_brain --cov=hackingtool --cov=property_scout
 
 # Run a specific test file
 pytest tests/test_agent_router.py -v
@@ -144,7 +162,7 @@ When writing new tests for `agent_router`, rely on the autouse fixture in `tests
 
 **Default agent**: `Senior Developer` (`is_default: true` in `agents.yaml`)
 
-**AgentConfig singleton** (`config.py`): Loads `agents.yaml` once and caches it. Validates required fields (`name`, `description`, `keywords`, `file_path`) and that `file_path` exists on disk. Call `AgentConfig.clear_cache()` to reset between tests.
+**AgentConfig singleton** (`config.py`): Loads `agents.yaml` once and caches it. Validates required fields (`name`, `description`, `keywords`, `file_path`), resolves a relative `file_path` against the project root, and checks that the file exists. Call `AgentConfig.clear_cache()` to reset between tests.
 
 **AgentPersonality** (`personality.py`): Loads and parses agent `.md` files at runtime. Extracts frontmatter (YAML), sections (identity, mission, tools, workflow), tone, examples, deliverables, and critical rules. Results are cached per agent name. Raises `PersonalityLoadError` on parse failure.
 
@@ -196,6 +214,39 @@ second-brain stats
 - Global flags: `--timeout`, `--threads`, `--verbose`, `--no-banner`
 - `Config` dataclass (`core/config.py`): `timeout`, `verbose`, `max_threads`
 
+### Property Scout (`property_scout/`)
+
+- Entry point: `property-scout` CLI (`python -m property_scout`); **zero runtime external dependencies**
+- The UAE Property Scout agent collects listings from the web; this engine does everything that must be reproducible: validation, duplicate folding, hard filters, cost stacks, yields, payment-plan present value, scoring, flags, ranking, reports
+
+| Sub-command | Purpose |
+|-------------|---------|
+| `template`  | Print an example brief, or a ready and an off-plan example listing |
+| `plan`      | Turn a brief into the portal pages and search queries to open |
+| `comps`     | Median price per sqft from raw sold or rent rows (size band, look-back window, completion status, `--new-leases`), with the date span and the largest project's share |
+| `costs`     | Itemised acquisition costs and own funds for one purchase (`--community`, `--nationality`, `--first-home`, `--waived`) |
+| `score`     | Filter, de-duplicate, score and rank listings; `--format json|md|html`, `--lang en|ru` |
+
+- **Inputs are validated at the boundary** (`fields.py`): `Brief.from_dict` and `Listing.from_dict` reject unknown fields by name and wrong types by value (`"1,850,000"` for a number, `"yes"` for a switch, a non-ISO date), so a slip by the agent is an error, not a silently coerced figure. `url`, `price_aed` and `evidence` (`page`, `card` or `lead`) are required on a listing
+- **Scoring** (`scoring.py`): five criteria, each 0–100 — `value` (asking price per sqft against a sold-price benchmark), `yield`, `fit`, `trust`, `terms` — weighted by the brief's purpose (`PROFILES`). Each criterion carries an `evidence` share: none when there is no data (the score is then `NEUTRAL`, 50), half (`PARTIAL`) when it rests on fewer than `MIN_COMPS` rows or on an estimate. The weighted share is the listing's `confidence`, shown to readers as "data completeness"; a criterion that does not apply is left out of both
+- **A gap never shortlists.** Dropping any field from a record must not put the offer on the shortlist: what it would be judged on (benchmark, size, rent where income is weighed, sale type) and every limit of the brief has to be there, or the offer is flagged and held at `consider`. Weak evidence caps a good score and never lifts a bad one (`_held`), and a home of unstated completion that carries off-plan facts gets the off-plan checks (`unbuilt`). `tests/property_scout/test_invariants.py` drops every field in turn from generated records and fails when one of them lifts a verdict to shortlist
+- **Verdicts** (`_verdict`): a critical flag gives `verify_first`; the analyst's `pass` stands; completeness under `RATED_CONFIDENCE` gives `needs_data`; an ask at or beyond `VALUE_WORST_GAP` over a full benchmark is a `pass`; a shortlist-level score is held at `consider` by any flag in `HELD_AT_CONSIDER`, by the analyst's cap, or by a project far behind schedule under a deadline. Ranking is by verdict order, then score, then the lower outlay
+- **Trust** counts every check whether or not it was made (evidence level, date seen, permit or verification, which for a first sale is replaced by `price_corroborated`; for off-plan also developer tier and registration), so a skipped check scores nothing instead of dropping out of the average
+- **Costs** (`costs.py`): `SCHEDULES` holds each emirate's published fees with the source in a comment; `complete` marks a schedule that also covers commission and mortgage registration. A loan is cut to the Central Bank ceiling (`ltv_cap`) in every emirate and the cut is flagged; `own_funds` is the outlay less the loan. A fee nobody publishes (the trustee's on an off-plan resale) is left out and flagged, never estimated. An emirate with no schedule returns the price only and raises a flag. `RATES_AS_OF` is printed in every report
+- **Dates** (`metrics.expected_handover`): the register's completion date while it is still ahead, else the advert's, else none. A lapsed register date is not a delivery date. `schedule_shortfall` compares the share of the construction period elapsed with the share built
+- **Duplicates** (`dedupe.py`): `fold` groups adverts when nothing contradicts and they share a page, a permit, or building, community, bedrooms and size; every advert is compared with the first of its group alone. `assess` folds first and tests each unit against the brief on the union of what its adverts showed (`represent`), so a fact one advert mentions cannot be dropped by another leading; the best-evidenced advert that passes represents the unit and the rest stay listed in the report
+- **Messages** (`messages.py`): scoring emits `Note(code, params)`, never prose; `render()` turns a note into English or Russian. Both languages must define the same codes (tested)
+- **The agent definition quotes the engine** (scales, weights, thresholds, fee table, lending ceilings, every brief and listing field, every example command). `tests/property_scout/test_agent_registration.py` fails when they drift apart
+- **Independent arithmetic check**: `bash tests/validation/test_property_scout_math.sh` recomputes costs, plan values, yields and scores with awk and compares them with the CLI's output
+
+```bash
+property-scout template brief > brief.json
+property-scout plan --brief brief.json
+property-scout comps --rows sold_rows.json --size 760 --months 12 --completion ready
+property-scout costs --price 2000000 --emirate dubai --sale-type resale --financing mortgage --ltv 0.75 --first-home
+property-scout score --brief brief.json --listings listings.json --format html --lang ru --out shortlist.html
+```
+
 ---
 
 ## Continuous Integration
@@ -206,23 +257,21 @@ second-brain stats
 
 | Job | Scope |
 |---|---|
-| `tests (narrow: hackingtool + second_brain)` | 225 tests on Python 3.9, 3.12, 3.14, plus an import smoke of all three packages and a CLI smoke of `hackingtool` and `second-brain` |
+| `tests (narrow: hackingtool + second_brain)` | 1067 tests on Python 3.9, 3.12, 3.14 from `tests/hackingtool`, `tests/test_second_brain.py` and `tests/property_scout`, plus an import smoke of all four packages and a CLI smoke of `hackingtool`, `second-brain` and `property-scout`. The job name predates `property_scout` and is kept so required status checks do not break |
 | `checks (coverage, network isolation, hygiene)` | Coverage floor 65% on the gated packages, a guard proving no gated test performs real network or subprocess I/O, a tracked-artifact check, and a floor on the gate's own test count |
 
-**What it does NOT gate.** The 8 `agent_router` test files are excluded — they contribute 254 failures, every one terminating in `AgentConfigError` from the absolute `file_path` values described under "Absolute Path Issue" below. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
+**What it does NOT gate.** The 8 `agent_router` test files are still excluded; the only router behaviour in the gate is the UAE Property Scout's registration and routing (`tests/property_scout/test_agent_registration.py`). They used to contribute 254 failures, every one an `AgentConfigError` from absolute `file_path` values; with paths now resolved against the project root (see "Agent File Paths" below) they contribute 3. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
 
-**Widening the gate** takes more than fixing `agents.yaml`. Six failures survive a path fix and are currently masked by the config error:
+**Widening the gate** needs two product decisions, not more mechanical work. The three remaining failures are:
 
-- `test_agent_config.py:26-30` and `test_agent_router.py:245-249` hardcode the original author's Mac paths and cannot pass on any machine
-- `test_agent_config.py:257-268` asserts `'agency_agents' in file_path`, coupling the suite to the checkout directory's name
-- `test_all_37_agents.py:655-660` asserts 37 agents; `agents.yaml` registers 41
-- two `test_agent_router.py` protocol tests assert every agent sets `requirements_gathering_first` and `test_first_development` true, but 2 and 4 agents respectively set them false — a product decision, not a mechanical fix
+- `test_all_37_agents.py::test_all_37_agents_exist` asserts 37 agents; `agents.yaml` registers more
+- two `test_agent_router.py` protocol tests assert every agent sets `requirements_gathering_first` and `test_first_development` true, but several agents set them false on purpose
 
-Order: fix path resolution in `AgentConfig._validate_agent`, rewrite the three machine-coupled tests, settle the 41-vs-37 count and the protocol-flag contradiction, then replace the two gate paths with `tests/` and drop "narrow" from the job names.
+Settle the agent count and the protocol-flag contradiction, then replace the gate paths with `tests/` and drop "narrow" from the job names.
 
-**Coverage is a regression guard, not a correctness signal.** Measured 68.7% on the gated packages against a 65% floor. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
+**Coverage is a regression guard, not a correctness signal.** Measured 85% on the gated packages against a 65% floor. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
 
-**Python floor is 3.9, not 3.8.** Ten modules use PEP 585 builtin generics (`list[tuple]`, `dict[str, str]`) in runtime-evaluated annotations without `from __future__ import annotations`, so 3.8 aborts collection with import errors before any test runs. `setup.py` declares `>=3.9` accordingly.
+**Python floor is 3.9, not 3.8.** Ten modules use PEP 585 builtin generics (`list[tuple]`, `dict[str, str]`) in runtime-evaluated annotations without `from __future__ import annotations`, so 3.8 aborts collection with import errors before any test runs. `setup.py` declares `>=3.9` accordingly. The 3.9 job runs on `ubuntu-24.04` rather than `ubuntu-latest`: the 26.04 image has no 3.9 build for `setup-python`, so the floor is tested on the last image that ships it.
 
 ---
 
@@ -285,6 +334,10 @@ color: blue
 
 The body contains the agent's identity, mission, tools, workflow, and communication style. These files are the source of truth for agent behavior — `agents.yaml` references them via `file_path`.
 
+### Agents Installed for Claude Code
+
+`.claude/agents/uae-property-scout.md` is a byte-for-byte copy of `agents/real-estate/real-estate-uae-property-scout.md`, so a Claude Code session opened in this repository can delegate to the agent. Edit the source under `agents/`, then copy it over; a test fails when the two differ.
+
 ### Known Issue: Unregistered Agent Files
 
 14 agent `.md` files exist in `agents/` subdirectories but are **not registered in `agents.yaml`**:
@@ -293,13 +346,11 @@ The body contains the agent's identity, mission, tools, workflow, and communicat
 - `agents/project-management/`: `project-management-experiment-tracker.md`, `project-management-project-shepherd.md`, `project-management-studio-operations.md`, `project-management-studio-producer.md`, `project-manager-senior.md`
 - `agents/spatial-computing/`: `macos-spatial-metal-engineer.md`, `terminal-integration-specialist.md`, `visionos-spatial-engineer.md`, `xr-cockpit-interaction-specialist.md`, `xr-immersive-developer.md`, `xr-interface-architect.md`
 
-To activate these agents, add their entries to `agent_router/agents.yaml` with correct local `file_path` values.
+To activate these agents, add their entries to `agent_router/agents.yaml` with project-relative `file_path` values.
 
-### Absolute Path Issue
+### Agent File Paths
 
-The `agents.yaml` `file_path` values are absolute paths from the original author's machine (`/Users/gaganarora/...`). The `AgentConfig._validate_agent` method calls `os.path.exists(agent['file_path'])` and raises `AgentConfigError` if the path doesn't exist.
-
-**Fix for local development**: Update `file_path` values in `agents.yaml` to point to your local absolute paths, or modify `_validate_agent` to resolve paths relative to the project root.
+`file_path` values in `agents.yaml` are relative to the project root (`agents/<category>/<file>.md`). `AgentConfig._validate_agent` anchors a relative path at `agent_router.config.PROJECT_ROOT`, replaces it with the absolute path, and raises `AgentConfigError` if the file does not exist, so the router loads from any working directory and any checkout location. An absolute path is accepted as written.
 
 ---
 
@@ -317,13 +368,18 @@ No code changes needed — categories are free-form strings on `KnowledgeItem`. 
 ### Extend the routing score
 Edit `AgentRouter._calculate_agent_score` in `agent_router/router.py`. Keyword specificity bonuses and pattern detection live in `_detect_multi_agent_patterns`.
 
+### Change a property_scout scoring constant or fee
+1. Edit the constant in `property_scout/scoring.py` or the schedule in `property_scout/costs.py`, keeping the source of a fee in its comment and bumping `RATES_AS_OF`
+2. Update the matching sentence or table in `agents/real-estate/real-estate-uae-property-scout.md` and copy the file to `.claude/agents/uae-property-scout.md`; a fee change also needs its line in `tests/validation/test_property_scout_math.sh`
+3. Run `pytest tests/property_scout -q`; the registration tests name any figure the definition still states differently
+
 ### Register an unregistered agent
 Add to `agent_router/agents.yaml`:
 ```yaml
 - name: Agent Name
   description: One-line description
   keywords: [keyword1, keyword2]
-  file_path: /absolute/path/to/agents/category/filename.md
+  file_path: agents/category/filename.md
   category: category-name
   is_default: false
   protocols:
@@ -342,5 +398,9 @@ Add to `agent_router/agents.yaml`:
 - Do not hardcode values in tests — import from actual modules
 - Do not commit `__pycache__/`, `.env`, or `*.pyc` files
 - Do not skip the `AgentConfig.clear_cache()` in test fixtures — it causes cross-test contamination
-- Do not update `agents.yaml` `file_path` values to non-existent paths without updating the validation logic
+- Do not put machine-specific absolute paths in `agents.yaml`; `file_path` is relative to the project root and must exist
 - Do not add the 14 unregistered agents to `agents.yaml` without first verifying their `.md` files parse correctly via `AgentPersonality.load_agent()`
+- Do not put prose in `property_scout/scoring.py`; add a code to both languages in `messages.py` and emit a `Note`. A test fails when a catalogue entry cannot be reached
+- Do not coerce input in `property_scout`: add the check to `fields.py` and let the wrong value be named
+- Do not add a field to `Brief` or `Listing` without naming it in the agent definition; the registration tests list what is missing
+- Do not add a fee to `property_scout/costs.py` from memory or a broker page; read it from the emirate's own schedule and say where

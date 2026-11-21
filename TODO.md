@@ -1,6 +1,6 @@
 # Agency Agents Project To-Do List
 
-Last Updated: 2026-08-22
+Last Updated: 2026-11-21
 
 ## In Progress
 - No tasks currently in progress
@@ -9,6 +9,30 @@ Last Updated: 2026-08-22
 - No pending tasks
 
 ## Recent Updates
+- [x] Third revision of property_scout after a second round of independent review and live trials
+  - Completed: 2026-11-21
+  - Branch: claude/practical-gauss-1au7f9
+  - Fixed: fifty reproduced review findings, the common thread being that an omitted field improved the outcome
+  - Changed: units are folded before the brief is applied; untested limits hold an offer at consider; lapsed register dates are not delivery dates; first-sale prices need corroboration
+  - Changed: plan emits the portal's full community names, register-copy pages and bedroom-level benchmark pages; the definition documents address structure, paging and triage found in the trials
+  - Verified: every reviewer reproduction re-run; awk recomputation; mutation run
+
+- [x] Revise the property_scout engine and the UAE Property Scout definition after trials and independent review
+  - Completed: 2026-11-20
+  - Branch: claude/practical-gauss-1au7f9
+  - Changed: strict input typing (fields.py), Central Bank lending ceilings and own funds, Abu Dhabi and ADGM fee rules, trust scored over every check, partial evidence, verdict caps (only an opened page is shortlisted), duplicate folding without chains, place aliases
+  - Changed: report prints agent, date seen, permit, register entry, notes and sources; Markdown and HTML escape advert text
+  - Changed: agent definition corrected against two fact-check passes and three trial runs; tests tie it to the engine's constants, fields and commands
+  - Verified: awk recomputation in tests/validation/test_property_scout_math.sh; scripted mutation run
+
+- [x] Add UAE Property Scout agent and property_scout engine
+  - Completed: 2026-11-19
+  - Branch: claude/practical-gauss-1au7f9
+  - Added: agents/real-estate/real-estate-uae-property-scout.md, registered in agents.yaml (real-estate category) and installed at .claude/agents/
+  - Added: property_scout/ (plan, comps, costs, score) with tests in tests/property_scout/, joined to the CI gate
+  - Fixed: agents.yaml file paths are project-relative; router suite went from 254 failures to 3
+  - Open: the three remaining router failures are product decisions (agent count, protocol flags)
+
 - [x] Add GitHub Actions CI
   - Completed: 2026-08-22
   - Branch: claude/ci-workflow-setup
