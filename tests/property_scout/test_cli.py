@@ -55,7 +55,7 @@ class TestScore:
         brief, listings, _ = files
         data = json.loads(output("score", "--brief", str(brief), "--listings", str(listings), "--today", "2026-11-20").out)
         assert data["as_of"] == "2026-11-20"
-        assert data["counts"] == {"received": 2, "unique": 2, "ranked": 2, "shortlisted": 1, "rejected": 0}
+        assert data["counts"] == {"received": 2, "unique": 2, "ranked": 2, "shortlisted": 1, "held": 1, "rejected": 0}
         assert [row["verdict"] for row in data["ranked"]] == ["shortlist", "consider"]
         assert {row["url"] for row in data["ranked"]} == {READY_EXAMPLE["url"], OFFPLAN_EXAMPLE["url"]}
 
@@ -223,6 +223,20 @@ class TestOtherCommands:
         assert (data["first_date"], data["last_date"]) == ("2026-10-01", "2026-11-02")
         assert data["thin"] and data["largest_project_share"] == pytest.approx(2 / 3)
         assert len(data["notes"]) == 2 and str(MIN_COMPS) in data["notes"][0]
+
+    def test_comps_leaves_out_marked_rows_and_named_projects(self, tmp_path, output):
+        rows = tmp_path / "rows.json"
+        rows.write_text(json.dumps([
+            {"price_aed": 1_500_000, "size_sqft": 750, "project": "Tower A"},
+            {"price_aed": 600_000, "size_sqft": 750, "project": "Tower A", "excluded": "bulk transaction"},
+            {"price_aed": 1_800_000, "size_sqft": 750, "project": "Tower B"},
+            {"price_aed": 2_100_000, "size_sqft": 750, "project": "Tower C"},
+        ]))
+        base = ("comps", "--rows", str(rows), "--today", "2026-11-19")
+        kept = json.loads(output(*base).out)
+        assert kept["used"] == 3 and kept["dropped"]["excluded"] == 1 and kept["median_psf"] == pytest.approx(2400)
+        fewer = json.loads(output(*base, "--exclude-project", "tower b", "--exclude-project", "Tower C").out)
+        assert fewer["used"] == 1 and fewer["dropped"]["project"] == 2 and fewer["median_psf"] == pytest.approx(2000)
 
     def test_comps_looks_back_twelve_months_unless_told_otherwise(self, tmp_path, output):
         rows = tmp_path / "rows.json"

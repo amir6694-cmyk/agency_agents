@@ -5,7 +5,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from statistics import median
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from .fields import Check, InputError
 from .text import completion_slug, norm
@@ -54,6 +54,7 @@ def summarise(
     months: int = 3,
     completion: Optional[str] = None,
     new_leases: bool = False,
+    exclude_projects: Sequence[str] = (),
 ) -> CompSummary:
     """Median of the rows that are comparable to the subject.
 
@@ -62,10 +63,13 @@ def summarise(
     window or the wanted completion status are dropped and counted, as are
     renewals and short lets when only new twelve-month leases are wanted. A row
     dated after the valuation date is a mistyped one and is dropped with the old ones.
+    A row that carries a reason in `excluded` (a bulk transfer, a sale between related
+    parties) and a row of a project named for exclusion stay in the file and are counted as left out.
     """
     wanted = completion_slug(completion) if completion else None
     earliest = _months_back(today, months)
-    dropped = {"incomplete": 0, "size": 0, "date": 0, "completion": 0, "contract": 0}
+    unwanted = {norm(name) for name in exclude_projects}
+    dropped = {"incomplete": 0, "excluded": 0, "project": 0, "size": 0, "date": 0, "completion": 0, "contract": 0}
     psf: List[float] = []
     prices: List[float] = []
     dates: List[str] = []
@@ -77,8 +81,15 @@ def summarise(
         price = check.number("price_aed", row.get("price_aed"), open_low=False)
         size = check.number("size_sqft", row.get("size_sqft"), open_low=False)
         day = check.day("date", row.get("date"))
+        project = norm(check.text("project", row.get("project")))
         if not price or not size or price < 1 or size < 1:
             dropped["incomplete"] += 1
+            continue
+        if check.text("excluded", row.get("excluded")):
+            dropped["excluded"] += 1
+            continue
+        if project and project in unwanted:
+            dropped["project"] += 1
             continue
         if subject_size_sqft and abs(size - subject_size_sqft) > SIZE_BAND * subject_size_sqft:
             dropped["size"] += 1
@@ -99,7 +110,6 @@ def summarise(
         prices.append(price)
         if day:
             dates.append(day)
-        project = norm(check.text("project", row.get("project")))
         if project:
             projects[project] += 1
     if not psf:

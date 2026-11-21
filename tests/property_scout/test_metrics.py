@@ -202,3 +202,48 @@ class TestPaymentPlanValue:
         """Deferring 40% of the price over 40 monthly instalments, as worked through in the trade press."""
         listing = make_listing(payment_plan={"on_booking": 60, "post_handover": 40}, post_handover_months=40)
         assert plan_value(listing, today, rate).deferral_benefit == pytest.approx(published, abs=0.0005)
+
+
+class TestDatedInstalments:
+    plan = {"on_booking": 5, "during_construction": 25, "on_handover": 70}
+    rate = 0.06
+
+    def offer(self, make_listing, **extra):
+        return make_listing(completion="offplan", handover="2027-11", payment_plan=self.plan, **extra)
+
+    def test_each_stated_instalment_is_costed_in_its_month(self, make_listing, today):
+        stated = [{"pct": 15, "after_months": 1}, {"pct": 5, "after_months": 4}, {"pct": 5, "after_months": 8}]
+        flows = plan_cashflows(self.offer(make_listing, instalments=stated), today)
+        assert flows == [(0, 0.05), (1, 0.15), (4, 0.05), (8, 0.05), (12, 0.70)]
+        monthly = (1 + self.rate) ** (1 / 12) - 1
+        expected = 0.05 + 0.15 / (1 + monthly) + 0.05 / (1 + monthly) ** 4 + 0.05 / (1 + monthly) ** 8 + 0.70 / (1 + monthly) ** 12
+        value = plan_value(self.offer(make_listing, instalments=stated), today, self.rate)
+        assert value.present_value_ratio == pytest.approx(expected)
+        assert value.dated_pct == 25 and value.paid_before_handover_pct == 30
+
+    def test_money_called_early_is_worth_more_than_an_even_spread_assumes(self, make_listing, today):
+        early = plan_value(self.offer(make_listing, instalments=[{"pct": 25, "after_months": 1}]), today, self.rate)
+        even = plan_value(self.offer(make_listing), today, self.rate)
+        late = plan_value(self.offer(make_listing, instalments=[{"pct": 25, "after_months": 11}]), today, self.rate)
+        assert early.present_value_ratio > even.present_value_ratio > late.present_value_ratio
+
+    def test_a_date_is_counted_from_the_valuation_date_and_a_past_one_is_due_now(self, make_listing, today):
+        stated = [{"pct": 10, "due": "2026-03"}, {"pct": 10, "due": "2027-03"}, {"pct": 5, "due": "2027-Q3"}]
+        flows = plan_cashflows(self.offer(make_listing, instalments=stated), today)
+        assert flows == [(0, 0.05), (0, 0.10), (4, 0.10), (8, 0.05), (12, 0.70)]
+
+    def test_what_is_left_undated_is_spread_evenly_to_handover(self, make_listing, today):
+        flows = plan_cashflows(self.offer(make_listing, instalments=[{"pct": 13, "after_months": 2}]), today)
+        spread = [(month, share) for month, share in flows if share == pytest.approx(0.12 / 12)]
+        assert [month for month, _ in spread] == list(range(1, 13))
+        assert sum(share for _, share in flows) == pytest.approx(1.0)
+
+    def test_nothing_is_spread_once_every_instalment_is_dated(self, make_listing, today):
+        stated = [{"pct": 12.5, "after_months": 3}, {"pct": 12.5, "after_months": 9}]
+        assert len(plan_cashflows(self.offer(make_listing, instalments=stated), today)) == 4
+
+    def test_the_first_year_counts_what_falls_due_within_twelve_months(self, make_listing, today):
+        stated = [{"pct": 15, "after_months": 1}, {"pct": 10, "after_months": 13}]
+        late = make_listing(completion="offplan", handover="2028-11", payment_plan=self.plan, instalments=stated)
+        assert plan_value(late, today, self.rate).due_in_first_year == pytest.approx(0.20)
+        assert plan_value(self.offer(make_listing), today, self.rate).due_in_first_year == pytest.approx(1.0)

@@ -20,14 +20,18 @@ from property_scout.costs import (
     LTV_CAP_OFFPLAN,
     SCHEDULES,
 )
-from property_scout.dedupe import CONFLICTING_TAGS, PRICE_TOLERANCE, SIZE_TOLERANCE
+from property_scout.dedupe import CONFLICTING_TAGS, CONTRADICTING_FACTS, PRICE_TOLERANCE, SIZE_TOLERANCE
 from property_scout.fields import LONG_TEXT, MAX_TEXT
-from property_scout.listing import ANALYST_CAPS, EVIDENCE, PLAN_STAGES, Listing
+from property_scout.listing import ANALYST_CAPS, EVIDENCE, INSTALMENT_KEYS, PLAN_STAGES, Listing
+from property_scout.messages import UI
+from property_scout.metrics import FIRST_YEAR_MONTHS
+from property_scout.plan import YIELD_DISTRICTS, search_plan
 from property_scout.scoring import (
     ASSUMED_YIELD_LOSS,
     BEHIND_SCHEDULE_GAP,
     CONSIDER_SCORE,
     DEFAULT_DISCOUNT_RATE,
+    HELD_AT_CONSIDER,
     DEVELOPER_TIER_POINTS,
     EVIDENCE_POINTS,
     FRESH_WITHIN_DAYS,
@@ -165,6 +169,51 @@ class TestDefinitionMatchesEngine:
         assert f"an uncorroborated first sale {abs(VALUE_BEST_GAP):.0%} or more below registered sales" in rubric
         assert f"an ask {VALUE_WORST_GAP:.0%} or more above a benchmark of fewer than five sales" in rubric
         assert f"more than {BEHIND_SCHEDULE_GAP * 100:.0f} points ahead of the share built" in definition
+        for gap in (
+            "rent with no service charge to cost it",
+            "an off-plan first sale with no payment plan recorded",
+            "with no completion date still ahead read from the register",
+        ):
+            assert gap in rubric, gap
+        assert {"service_charge_unknown", "no_plan", "plan_date_unconfirmed"} <= set(HELD_AT_CONSIDER)
+
+    def test_states_the_limits_that_hold_an_offer_when_untested(self, definition):
+        rubric = section(definition, "### Rubric")
+        for phrase in (
+            "(emirate, completion status, bedroom count or property type not stated",
+            "an exclusion the record gives nothing to test on",
+            "a home recorded as ready whose handover or registered completion date is still ahead",
+            "where the brief weighs income",
+            "Equal scores are ordered by the fuller data, then by the lower total outlay",
+        ):
+            assert phrase in rubric, phrase
+        assert {"emirate_missing", "exclusion_untested", "completion_contradicted"} <= set(HELD_AT_CONSIDER)
+        assert [fact for fact in CONTRADICTING_FACTS if fact.replace("_", " ") not in rubric] == []
+        assert "it needs both `building` and `developer`" in definition
+
+    def test_quotes_the_headings_a_held_offer_is_given(self, definition):
+        rubric = section(definition, "### Rubric")
+        assert f'"{UI["en"]["verdict.held"]}"' in rubric
+        assert UI["en"]["verdict.held_analyst"].endswith("held back by the analyst") and '"held back by the analyst"' in rubric
+
+    def test_describes_dated_instalments_and_the_first_year(self, definition):
+        record = section(definition, "### The listing record")
+        assert [key for key in INSTALMENT_KEYS if f'"{key}"' not in record] == []
+        assert FIRST_YEAR_MONTHS == 12 and "what falls due in the first twelve months" in definition
+        assert "counts only when it raises the score" in section(definition, "### Rubric")
+
+    def test_describes_the_search_by_yield_the_plan_starts_with(self, definition):
+        how = section(definition, "### Searching by yield")
+        assert "`yield_scan`" in how
+        named = how.lower().replace("(", "").replace(")", "")
+        assert [slug for slug in YIELD_DISTRICTS if slug.replace("-", " ") not in named] == []
+        brief = Brief.from_dict({"budget_max": 650_000, "purpose": "yield"})
+        assert next(step["step"] for step in search_plan(brief) if step["step"] != "note") == "yield_scan"
+
+    def test_describes_how_rows_are_left_out_of_a_benchmark(self, definition):
+        args = build_parser().parse_args(["comps", "--rows", "rows.json", "--exclude-project", "Tower A"])
+        assert args.exclude_project == ["Tower A"]
+        assert '`--exclude-project "Name"`' in definition and '`"excluded": "bulk transaction"`' in definition
 
     def test_states_the_folding_tolerances(self, definition):
         rubric = section(definition, "### Rubric")

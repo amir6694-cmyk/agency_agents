@@ -14,6 +14,8 @@ EVIDENCE = ("page", "card", "lead")
 PLAN_STAGES = ("on_booking", "during_construction", "on_handover", "post_handover")
 ANALYST_CAPS = ("consider", "pass", "verify_first")
 MAX_POST_HANDOVER_MONTHS = 240
+MAX_INSTALMENTS = 60
+INSTALMENT_KEYS = ("pct", "after_months", "due")
 REQUIRED = ("url", "price_aed", "evidence")
 MAX_LABEL = 120
 MIN_PERMIT_DIGITS = 5
@@ -45,6 +47,7 @@ class Listing:
     sale_type: Optional[str] = None
     handover: Optional[str] = None
     payment_plan: Dict[str, float] = field(default_factory=dict)
+    instalments: List[Dict[str, Any]] = field(default_factory=list)
     post_handover_months: int = 0
     from_price: bool = False
     transfer_fee_waived: bool = False
@@ -119,6 +122,7 @@ class Listing:
                 for stage, share in check.mapping("payment_plan", get("payment_plan")).items()
                 if share is not None
             },
+            instalments=cls._instalments(check, get("instalments")),
             post_handover_months=check.integer("post_handover_months", get("post_handover_months"), 0, MAX_POST_HANDOVER_MONTHS) or 0,
             from_price=bool(check.boolean("from_price", get("from_price"))),
             transfer_fee_waived=bool(check.boolean("transfer_fee_waived", get("transfer_fee_waived"))),
@@ -198,6 +202,39 @@ class Listing:
             total = sum(self.payment_plan.values())
             if abs(total - 100) > 0.5:
                 raise check.fail("payment_plan", "percentages must sum to 100", total)
+        if self.instalments:
+            during = self.payment_plan.get("during_construction", 0)
+            dated = sum(item["pct"] for item in self.instalments)
+            if dated > during + 1e-6:
+                raise check.fail("instalments", f"detail payment_plan.during_construction ({during:g}%) and cannot add up to more", dated)
+
+    @staticmethod
+    def _instalments(check: Check, value: Any) -> List[Dict[str, Any]]:
+        """Payments during construction whose timing the developer states: months after booking, or a date."""
+        if value is None:
+            return []
+        if not isinstance(value, list) or len(value) > MAX_INSTALMENTS:
+            raise check.fail("instalments", f"must be a list of at most {MAX_INSTALMENTS} objects", value)
+        found = []
+        for index, item in enumerate(value, start=1):
+            name = f"instalments[{index}]"
+            unknown = sorted(set(check.mapping(name, item)) - set(INSTALMENT_KEYS)) if isinstance(item, dict) else None
+            if unknown is None or unknown:
+                raise check.fail(name, f"must be an object with {INSTALMENT_KEYS[0]} and one of {INSTALMENT_KEYS[1:]}", item)
+            share = check.number(f"{name}.pct", item.get("pct"), high=100)
+            months = check.integer(f"{name}.after_months", item.get("after_months"), 0, MAX_POST_HANDOVER_MONTHS)
+            due = check.text(f"{name}.due", item.get("due"))
+            if share is None or (months is None) == (not due):
+                raise check.fail(name, "needs pct and exactly one of after_months and due", item)
+            if due:
+                try:
+                    parse_period(due)
+                except ValueError as exc:
+                    raise ListingError(f"{check.where}: {name}.due: {exc}") from exc
+                found.append({"pct": share, "due": due})
+            else:
+                found.append({"pct": share, "after_months": months})
+        return found
 
     @staticmethod
     def _check_link(check: Check, name: str, link: str, required: bool) -> None:

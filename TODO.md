@@ -9,6 +9,15 @@ Last Updated: 2026-11-21
 - No pending tasks
 
 ## Recent Updates
+- [x] Fifth revision of property_scout: gaps a wider probe still lifted, and what the trial agents asked for
+  - Completed: 2026-11-21
+  - Branch: claude/practical-gauss-1au7f9
+  - Fixed: four ways a dropped field still reached the shortlist (a poor payment plan left out, a plan on a finished home, a register completion date, a service charge)
+  - Fixed: what a reviewer reproduced before it was cut off: an emirate or an exclusion left untested, a search result supplying what the opened page did not state, an advert bridging two flats that cannot be one, a ready home discounted to a future date, a deadline met on the advert's date after the register's had passed
+  - Added: a yield-first search (`plan` starts an income brief with no area from the districts where registered yield is highest; the definition says how to work them and gives the 21 November 2026 figures)
+  - Added: dated instalments, cash due within twelve months, `comps` row and project exclusion, "held back" headings and count, must-haves that name a developer or a tower
+  - Verified: 546,000 single and paired field drops with no lift on the widened generator; the invariants test fails on the previous engine; awk recomputation (40 checks); 82 mutations, one equivalent
+
 - [x] Third revision of property_scout after a second round of independent review and live trials
   - Completed: 2026-11-21
   - Branch: claude/practical-gauss-1au7f9

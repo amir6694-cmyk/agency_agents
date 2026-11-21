@@ -106,7 +106,7 @@ class TestFormatting:
 class TestData:
     def test_counts_reconcile(self, result):
         assert [a.verdict for a in result.ranked] == ["shortlist", "needs_data"]
-        assert to_data(result)["counts"] == {"received": 4, "unique": 3, "ranked": 2, "shortlisted": 1, "rejected": 1}
+        assert to_data(result)["counts"] == {"received": 4, "unique": 3, "ranked": 2, "shortlisted": 1, "held": 0, "rejected": 1}
 
     def test_is_strict_json_and_ranked_in_order(self, result):
         data = json.loads(json.dumps(to_data(result), allow_nan=False))
@@ -283,3 +283,57 @@ class TestHtml:
 
     def test_empty_ranking_says_so(self, make_brief, today):
         assert UI["ru"]["none_ranked"] in to_html(assess(make_brief(), [], today), "ru")
+
+
+class TestHeldBack:
+    """A score good enough for the shortlist beside the word Consider needs the reason in the heading."""
+
+    @pytest.fixture
+    def held(self, make_brief, make_listing, today):
+        strong = dict(
+            benchmark_psf=2700, benchmark_count=MIN_COMPS, annual_rent_aed=140_000, rent_count=MIN_COMPS,
+            service_charge_psf=15, observed_on=today.isoformat(),
+        )
+        listings = [
+            make_listing(url="https://a.example/1", building="Open Tower", permit_number="7100000001", **strong),
+            make_listing(url="https://a.example/2", building="Card Tower", permit_number="7100000002", evidence="card", **strong),
+            make_listing(
+                url="https://a.example/3", building="Doubted Tower", permit_number="7100000003",
+                analyst_cap="consider", analyst_note="the photos show another flat", **strong,
+            ),
+            make_listing(url="https://a.example/4", building="Plain Tower", permit_number="7100000004", **{**strong, "benchmark_psf": 2200, "annual_rent_aed": 100_000}),
+        ]
+        return assess(make_brief(), listings, today)
+
+    def test_only_a_shortlist_level_score_kept_at_consider_is_called_held(self, held):
+        by_name = {a.listing.building: a for a in held.ranked}
+        assert [by_name[name].verdict for name in ("Open Tower", "Card Tower", "Doubted Tower", "Plain Tower")] == ["shortlist", "consider", "consider", "consider"]
+        assert [by_name[name].held for name in ("Open Tower", "Card Tower", "Doubted Tower", "Plain Tower")] == [False, True, True, False]
+        data = to_data(held)
+        assert data["counts"]["held"] == 2 and [row["held"] for row in data["ranked"]].count(True) == 2
+
+    @pytest.mark.parametrize("lang", LANGUAGES)
+    def test_the_heading_says_held_and_by_whom(self, held, lang):
+        t = UI[lang]
+        for text in (to_markdown(held, lang), to_html(held, lang)):
+            assert text.count(t["verdict.held_analyst"]) == 1
+            assert text.count(t["verdict.held"]) == 2  # once alone, once inside the analyst's label
+            assert f"{t['held']}: 2" in text or f"<b>2</b>{t['held']}" in text
+        headings = {line.split(". ", 1)[1].split(" — ")[0]: line for line in to_markdown(held, lang).splitlines() if line.startswith("## ") and " — " in line}
+        assert t["verdict.held_analyst"] in headings["Doubted Tower, Dubai Marina"]
+        assert t["verdict.held"] in headings["Card Tower, Dubai Marina"] and t["verdict.held_analyst"] not in headings["Card Tower, Dubai Marina"]
+        assert t["verdict.shortlist"] in headings["Open Tower, Dubai Marina"] and t["verdict.consider"] in headings["Plain Tower, Dubai Marina"]
+        assert t["verdict.held"] not in headings["Plain Tower, Dubai Marina"]
+
+    def test_first_year_cash_is_shown_beside_the_booking_cash(self, result):
+        offplan = next(a for a in result.ranked if a.listing.completion == "offplan")
+        assert offplan.cash_in_first_year > offplan.cash_at_booking
+        assert offplan.cash_in_first_year == pytest.approx(
+            offplan.listing.price_aed * offplan.plan.due_in_first_year + offplan.costs.total_costs
+        )
+        ready = next(a for a in result.ranked if a.listing.completion == "ready")
+        assert ready.cash_in_first_year is None
+        for lang in LANGUAGES:
+            assert UI[lang]["cash_in_first_year"] in to_markdown(result, lang) and UI[lang]["cash_in_first_year"] in to_html(result, lang)
+            assert f"{UI[lang]['cash_in_first_year']}: {aed(offplan.cash_in_first_year, lang)}" in to_markdown(result, lang)
+        assert to_data(result)["ranked"][[a.listing.url for a in result.ranked].index(offplan.listing.url)]["cash_in_first_year_aed"] == round(offplan.cash_in_first_year)
