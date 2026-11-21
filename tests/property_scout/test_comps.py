@@ -147,3 +147,32 @@ class TestBadRows:
     def test_a_wrong_value_is_named_with_its_row(self, today, bad):
         with pytest.raises(CompsError, match="row 2"):
             summarise([row(1_500_000, 750), bad], today, completion="ready")
+
+
+class TestLeftOut:
+    def rows(self):
+        return [
+            row(1_500_000, 750, project="Tower A"),
+            row(1_520_000, 750, project="Tower A"),
+            row(620_000, 750, project="Tower A", excluded="bulk transaction"),
+            row(1_900_000, 750, project="Tower B"),
+            row(1_950_000, 750, project="tower-b"),
+        ]
+
+    def test_a_row_with_a_reason_stays_in_the_file_and_out_of_the_median(self, today):
+        summary = summarise(self.rows(), today)
+        assert summary.used == 4 and summary.dropped["excluded"] == 1
+        assert summary.low_psf == pytest.approx(2000)
+
+    def test_a_project_can_be_left_out_by_name(self, today):
+        summary = summarise(self.rows(), today, exclude_projects=["Tower B"])
+        assert summary.used == 2 and summary.dropped["project"] == 2 and summary.dropped["excluded"] == 1
+        assert summary.median_psf == pytest.approx(median([2000, 1_520_000 / 750])) and summary.projects == 1
+
+    def test_an_empty_reason_excludes_nothing(self, today):
+        assert summarise([row(1_500_000, 750, excluded="")], today).used == 1
+
+    @pytest.mark.parametrize("bad", [True, 1, ["bulk"]])
+    def test_the_reason_must_be_text(self, today, bad):
+        with pytest.raises(CompsError, match="row 1: excluded must be text"):
+            summarise([row(1_500_000, 750, excluded=bad)], today)

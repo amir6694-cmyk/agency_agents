@@ -1,3 +1,5 @@
+from itertools import permutations
+
 import pytest
 
 from property_scout.dedupe import (
@@ -6,9 +8,11 @@ from property_scout.dedupe import (
     SHARED_FACTS,
     SIZE_TOLERANCE,
     TRACKING_PARAMETERS,
+    _contradict,
     canonical_url,
     dedupe,
     fold,
+    proven_tags,
     represent,
 )
 from property_scout.listing import ANALYST_CAPS, Listing
@@ -156,13 +160,53 @@ class TestDifferentUnits:
         second = make_listing(url="https://a.example/2", permit_number="7100000001", bedrooms=3)
         assert len(dedupe([first, second])) == 2
 
-    def test_a_chain_of_near_matches_does_not_grow_past_the_tolerance(self, make_listing):
+    def test_an_advert_between_two_that_cannot_be_one_unit_joins_neither(self, make_listing):
+        """Priced within reach of both, it could be either flat: folding it into one would be a guess."""
         first = make_listing(url="https://a.example/1", price_aed=1_800_000)
         bridge = make_listing(url="https://a.example/2", price_aed=1_860_000)
         last = make_listing(url="https://a.example/3", price_aed=1_930_000)
         groups = dedupe([first, last, bridge])
-        assert urls(groups) == ["https://a.example/1", "https://a.example/3"]
-        assert folded(groups) == {"https://a.example/1": ["https://a.example/2"]}
+        assert urls(groups) == ["https://a.example/1", "https://a.example/2", "https://a.example/3"]
+        assert folded(groups) == {}
+
+    def test_an_untagged_advert_does_not_bridge_a_vacant_flat_and_a_tenanted_one(self, make_listing):
+        silent = make_listing(url="https://a.example/1", price_aed=1_800_000)
+        vacant = make_listing(url="https://a.example/2", price_aed=1_820_000, tags=["vacant"])
+        tenanted = make_listing(url="https://a.example/3", price_aed=1_840_000, tags=["tenanted"])
+        groups = dedupe([silent, vacant, tenanted])
+        assert len(groups) == 3 and all(merged.tags == own.tags for (merged, _), own in zip(groups, (silent, vacant, tenanted)))
+        pair = dedupe([silent, vacant])
+        assert len(pair) == 1 and pair[0][0].tags == ["vacant"]
+
+    def test_no_group_holds_two_adverts_that_contradict_each_other(self, make_listing):
+        cheap = make_listing(url="https://a.example/1", price_aed=1_800_000)
+        twin = make_listing(url="https://b.example/1", price_aed=1_800_000)
+        dear = make_listing(url="https://a.example/3", price_aed=1_930_000)
+        middle = make_listing(url="https://a.example/2", price_aed=1_870_000)
+        for group in fold([cheap, twin, dear, middle]):
+            assert not any(_contradict(a, b) for a in group for b in group)
+
+    def test_adverts_of_equal_standing_come_out_in_one_order_whatever_the_file(self, make_listing):
+        page = make_listing(url="https://a.example/page", permit_number="7100000001")
+        search = "https://a.example/search?page=1"
+        first = make_listing(url=search, evidence="card", permit_number="7100000001", title="Agent A", tags=["balcony"], notes="Call after six")
+        second = make_listing(url=search, evidence="card", permit_number="7100000001", title="Agent B", tags=["upgraded"], notes="Keys with the agent")
+        one, other = dedupe([page, first, second]), dedupe([second, page, first])
+        assert one == other and [d.title for d in one[0][1]] == [d.title for d in other[0][1]]
+        assert one[0][0].tags == other[0][0].tags and one[0][0].notes == other[0][0].notes
+
+    def test_the_grouping_does_not_depend_on_the_order_of_the_file(self, make_listing):
+        search = "https://a.example/search?page=1"
+        cards = [
+            make_listing(url=search, evidence="card", title="High floor", tags=["high_floor"]),
+            make_listing(url=search, evidence="card", title="Low floor", tags=["low_floor"]),
+            make_listing(url=search, evidence="card", title="Rented", price_aed=1_810_000, tags=["tenanted"]),
+            make_listing(url="https://a.example/9", price_aed=1_805_000),
+        ]
+        shapes = set()
+        for order in permutations(cards):
+            shapes.add(tuple(sorted(tuple(sorted(member.title for member in group)) for group in fold(list(order)))))
+        assert len(shapes) == 1
 
 
 class TestMerging:
@@ -189,6 +233,40 @@ class TestMerging:
         assert as_card.evidence == "card" and as_card.price_aed == 1_800_000
         assert (as_card.size_sqft, as_card.bedrooms, as_card.building) == (750, 1, "Marina Gate 1")
         assert represent(group).benchmark_psf == 2_400
+
+    def test_a_page_does_not_take_the_description_of_the_unit_from_a_search_result(self, make_listing):
+        """What the analyst looked up is shared whichever record carries it; what a weaker advert claims is not."""
+        page = make_listing(url="https://a.example/page", completion=None, sale_type=None, handover=None, size_sqft=None, permit_number="7100000001")
+        lead = make_listing(
+            url="https://search.example/q", evidence="lead", permit_number="7100000001", completion="ready", sale_type="resale",
+            handover="2027-Q1", size_sqft=750, register_completion="2028-Q4", benchmark_psf=2_400, tags=["sea_view", "tenanted"],
+        )
+        group, = fold([lead, page])
+        as_page = represent(group)
+        assert as_page.evidence == "page"
+        assert (as_page.completion, as_page.sale_type, as_page.handover, as_page.size_sqft) == (None, None, None, None)
+        assert as_page.register_completion == "2028-Q4" and as_page.benchmark_psf == 2_400
+        assert as_page.tags == ["sea_view", "tenanted"] and proven_tags(group) == []
+        as_lead = represent(group, 1)
+        assert as_lead.evidence == "lead" and proven_tags(group, 1) == ["sea_view", "tenanted"]
+
+    def test_the_developers_schedule_is_taken_whole_and_only_from_an_advert_read_as_closely(self, make_listing):
+        schedule = dict(
+            payment_plan={"on_booking": 10, "during_construction": 30, "post_handover": 60},
+            instalments=[{"pct": 10, "after_months": 2}], post_handover_months=36,
+        )
+        bare = make_listing(url="https://a.example/1", completion="offplan", sale_type="primary", permit_number="7100000001")
+        planned = make_listing(url="https://b.example/2", completion="offplan", sale_type="primary", permit_number="7100000001", price_aed=1_820_000, **schedule)
+        group, = fold([bare, planned])
+        merged = represent(group)
+        assert merged.url == "https://a.example/1"
+        assert (merged.payment_plan, merged.instalments, merged.post_handover_months) == (schedule["payment_plan"], schedule["instalments"], 36)
+        claimed = make_listing(url="https://search.example/q", evidence="lead", completion="offplan", sale_type="primary", permit_number="7100000001", **schedule)
+        group, = fold([bare, claimed])
+        assert represent(group).payment_plan == {} and represent(group).post_handover_months == 0
+        own = make_listing(url="https://c.example/3", completion="offplan", sale_type="primary", permit_number="7100000001", payment_plan={"on_booking": 100})
+        group, = fold([own, planned])
+        assert represent(group).payment_plan == {"on_booking": 100} and represent(group).instalments == []
 
     def test_notes_and_sources_of_every_advert_are_kept(self, make_listing):
         first = make_listing(notes="Seller abroad", sources={"sold": "https://a.example/sold"})

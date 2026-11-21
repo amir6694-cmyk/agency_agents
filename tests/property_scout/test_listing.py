@@ -1,7 +1,7 @@
 import pytest
 
 from property_scout.fields import LONG_TEXT, MAX_TEXT
-from property_scout.listing import ANALYST_CAPS, EVIDENCE, MAX_LABEL, MIN_PERMIT_DIGITS, PLAN_STAGES, REQUIRED, Listing, ListingError
+from property_scout.listing import ANALYST_CAPS, EVIDENCE, Listing, ListingError, MAX_INSTALMENTS, MAX_LABEL, MIN_PERMIT_DIGITS, PLAN_STAGES, REQUIRED
 
 MINIMAL = {"url": "https://x.example/1", "price_aed": 1_000_000, "evidence": "page"}
 
@@ -212,3 +212,49 @@ class TestPaymentPlan:
         plan = {stage: 25 for stage in PLAN_STAGES}
         listing = make_listing(payment_plan=plan, post_handover_months=24, handover="2028-Q1")
         assert set(listing.payment_plan) == set(PLAN_STAGES)
+
+
+class TestInstalments:
+    plan = {"on_booking": 5, "during_construction": 25, "on_handover": 70}
+
+    def test_dated_instalments_detail_the_construction_share(self, make_listing):
+        stated = [{"pct": 15, "after_months": 1}, {"pct": 5, "after_months": 4}, {"pct": 5, "due": "2027-07"}]
+        listing = make_listing(completion="offplan", handover="2027-11", payment_plan=self.plan, instalments=stated)
+        assert listing.instalments == stated
+
+    def test_part_of_the_share_may_stay_undated(self, make_listing):
+        listing = make_listing(payment_plan=self.plan, instalments=[{"pct": 15, "after_months": 1}])
+        assert sum(item["pct"] for item in listing.instalments) == 15
+
+    def test_they_cannot_exceed_the_construction_share(self, make_listing):
+        with pytest.raises(ListingError, match=r"during_construction \(25%\)"):
+            make_listing(payment_plan=self.plan, instalments=[{"pct": 15, "after_months": 1}, {"pct": 11, "after_months": 4}])
+        with pytest.raises(ListingError, match=r"during_construction \(0%\)"):
+            make_listing(payment_plan={"on_booking": 20, "on_handover": 80}, instalments=[{"pct": 5, "after_months": 1}])
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"pct": 10},
+            {"pct": 10, "after_months": 1, "due": "2027-03"},
+            {"after_months": 1},
+            {"pct": 0, "after_months": 1},
+            {"pct": "10", "after_months": 1},
+            {"pct": 10, "after_months": 1.5},
+            {"pct": 10, "after_months": -1},
+            {"pct": 10, "due": "next spring"},
+            {"pct": 10, "month": 3},
+            {"pct": 10, "after_months": 3, "note": "on completion of the podium"},
+            [10, 3],
+            "10% in March",
+        ],
+    )
+    def test_a_malformed_instalment_is_named(self, make_listing, bad):
+        with pytest.raises(ListingError, match=r"instalments\[1\]"):
+            make_listing(payment_plan=self.plan, instalments=[bad])
+
+    def test_the_list_itself_must_be_a_short_list(self, make_listing):
+        with pytest.raises(ListingError, match="instalments must be a list"):
+            make_listing(payment_plan=self.plan, instalments={"pct": 10, "after_months": 1})
+        with pytest.raises(ListingError, match=f"at most {MAX_INSTALMENTS}"):
+            make_listing(payment_plan=self.plan, instalments=[{"pct": 0.1, "after_months": 1}] * (MAX_INSTALMENTS + 1))

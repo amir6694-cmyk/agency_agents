@@ -144,7 +144,12 @@ cat > "$WORK/listings.json" <<'JSON'
    "observed_on": "2026-11-12"},
   {"url": "https://example.com/e", "evidence": "page", "price_aed": 1000000, "emirate": "dubai",
    "community": "Test", "building": "Tower E", "bedrooms": 1, "size_sqft": 600, "completion": "ready",
-   "sale_type": "resale", "annual_rent_aed": 95000, "rent_count": 1, "service_charge_psf": 10}
+   "sale_type": "resale", "annual_rent_aed": 95000, "rent_count": 1, "service_charge_psf": 10},
+  {"url": "https://example.com/f", "evidence": "page", "price_aed": 1200000, "emirate": "dubai",
+   "community": "Test", "building": "Tower F", "bedrooms": 1, "size_sqft": 700, "completion": "offplan",
+   "sale_type": "primary", "handover": "2028-05",
+   "payment_plan": {"on_booking": 5, "during_construction": 35, "on_handover": 60},
+   "instalments": [{"pct": 15, "after_months": 1}, {"pct": 5, "after_months": 4}, {"pct": 5, "due": "2027-07"}]}
 ]
 JSON
 python3 -m property_scout score --brief "$WORK/brief.json" --listings "$WORK/listings.json" --today 2026-11-19 > "$WORK/out.json"
@@ -170,6 +175,18 @@ check "present value of a 60/40 post-handover plan" \
 check "present value of a 20/40/40 construction plan" \
     "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.2; for (m = 1; m <= 24; m++) pv += (0.4 / 24) / (1 + r) ^ m; pv += 0.4 / (1 + r) ^ 24; print pv }')" \
     "$(field b plan_present_value_ratio)" 0.000001
+
+# 5% today; 15%, 5% and 5% in months 1, 4 and 8 as the developer dates them; the other 10% of the
+# construction share in 18 equal monthly instalments; 60% at handover in 18 months
+check "present value of a plan with dated instalments" \
+    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.05 + 0.15 / (1 + r) + 0.05 / (1 + r) ^ 4 + 0.05 / (1 + r) ^ 8;
+        for (m = 1; m <= 18; m++) pv += (0.10 / 18) / (1 + r) ^ m; pv += 0.60 / (1 + r) ^ 18; print pv }')" \
+    "$(field f plan_present_value_ratio)" 0.000001
+
+# Due within twelve months: booking, the three dated instalments, twelve of the eighteen even ones, and the fees
+check "cash due within twelve months, dated instalments" \
+    "$(awk 'BEGIN { p = 1200000; print p * (0.05 + 0.15 + 0.05 + 0.05 + 0.10 * 12 / 18) + p * 0.04 + 20 }')" \
+    "$(field f cash_in_first_year_aed)"
 
 # Due at booking: the first instalment plus the registration fees
 check "cash due at booking, off-plan" "$(awk 'BEGIN { p = 1500000; print p * 0.20 + p * 0.04 + 20 }')" "$(field b cash_at_booking_aed)"
@@ -209,8 +226,12 @@ check "trust, off-plan page with nothing else checked" "$(awk 'BEGIN { print 100
 
 # Terms: a deferral worth 10% of the price scores 100
 check "terms score" \
-    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.6; for (m = 1; m <= 40; m++) pv += 0.01 / (1 + r) ^ m; print 100 * (1 - pv) / 0.10 }')" \
-    "$(field c criteria.@terms.score)" 0.06
+    "$(awk 'BEGIN { r = exp(log(1.06) / 12) - 1; pv = 0.2; for (m = 1; m <= 24; m++) pv += (0.4 / 24) / (1 + r) ^ m; pv += 0.4 / (1 + r) ^ 24; print 100 * (1 - pv) / 0.10 }')" \
+    "$(field b criteria.@terms.score)" 0.06
+
+# On a finished home a plan counts only when it raises the score: this one would lower it, so terms do not apply
+check "a thin plan on a finished home carries no weight in the score" "0" "$(field c criteria.@terms.weight)" 0.000001
+check "a plan on an unbuilt home carries its weight" "$(awk 'BEGIN { print 0.05 / (0.25 + 0.40 + 0.20 + 0.05) }')" "$(field b criteria.@terms.weight)" 0.000001
 
 # Total for a yield buyer: value 25%, yield 40%, trust 20%; fit and terms do not apply to this resale
 check "total score" \

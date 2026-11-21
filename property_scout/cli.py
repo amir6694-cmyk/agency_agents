@@ -91,12 +91,14 @@ OFFPLAN_EXAMPLE = asdict(
         sale_type="primary",
         handover="2028-Q4",
         payment_plan={"on_booking": 20, "during_construction": 40, "on_handover": 40},
+        instalments=[{"pct": 10, "after_months": 2}, {"pct": 10, "due": "2027-06"}],
         from_price=True,
         price_corroborated=True,
         observed_on="2026-11-20",
         annual_rent_aed=88_000,
-        rent_basis="median of 8 new 12-month leases of 1-beds in a delivered building next door, Aug-Nov 2026",
+        rent_basis="median of 8 new 12-month leases of 1-beds in a delivered building next door, Aug-Nov 2026; its service charge",
         rent_count=8,
+        service_charge_psf=18,
         benchmark_psf=2_150,
         benchmark_basis="median of 12 registered off-plan 1-bed sales in the community, Sep-Nov 2026",
         benchmark_count=12,
@@ -227,7 +229,9 @@ def cmd_comps(args) -> int:
     rows = _read_json(args.rows)
     if not isinstance(rows, list):
         raise CompsError("comparables file must be a JSON array of rows")
-    summary = summarise(rows, args.today or date.today(), args.size, args.months, args.completion, args.new_leases)
+    summary = summarise(
+        rows, args.today or date.today(), args.size, args.months, args.completion, args.new_leases, args.exclude_project
+    )
     notes = []
     if summary.thin:
         notes.append(f"fewer than {MIN_COMPS} comparable rows: widen the window or the area and say so")
@@ -308,11 +312,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_costs)
 
     p = sub.add_parser("comps", help="Median price per sqft from raw sold or rent rows")
-    p.add_argument("--rows", required=True, help="JSON array of {price_aed, size_sqft, date, completion, project, contract, term_months}")
+    p.add_argument(
+        "--rows", required=True,
+        help="JSON array of {price_aed, size_sqft, date, completion, project, contract, term_months, excluded}; "
+        "a row whose 'excluded' gives a reason is counted and left out",
+    )
     p.add_argument("--size", type=_positive, default=None, help="Subject size in sqft; rows over 20%% away are dropped")
     p.add_argument("--months", type=_count, default=12, help="Look-back window for dated rows (default 12)")
     p.add_argument("--completion", choices=COMPLETION, default=None)
     p.add_argument("--new-leases", dest="new_leases", action="store_true", help="Rent rows: keep new twelve-month contracts only")
+    p.add_argument(
+        "--exclude-project", dest="exclude_project", action="append", default=[], metavar="NAME",
+        help="Leave out the rows of this project; repeat for several",
+    )
     p.add_argument("--today", type=_day, default=None)
     p.set_defaults(handler=cmd_comps)
 

@@ -8,6 +8,11 @@ from .listing import Listing
 from .text import months_until, parse_period, period_end
 
 
+FIRST_YEAR_MONTHS = 12
+# A construction share smaller than this is rounding left over once the dated instalments are taken out.
+UNDATED_FLOOR = 1e-9
+
+
 @dataclass
 class PlanValue:
     present_value_ratio: float
@@ -15,6 +20,8 @@ class PlanValue:
     booking_pct: float
     paid_before_handover_pct: float
     months_to_handover: int
+    due_in_first_year: float = 0.0
+    dated_pct: float = 0.0
 
 
 def benchmark_gap(listing: Listing) -> Optional[float]:
@@ -71,6 +78,9 @@ def months_to_handover(listing: Listing, today: date) -> Optional[int]:
 
     Zero for a finished unit or a date that has passed; unknown for an unbuilt one whose plan defers money to an undated handover.
     """
+    if listing.completion == "ready":
+        # A date on a finished home is history or a slip: nothing is deferred to it.
+        return 0
     if listing.scheduled_handover:
         expected = expected_handover(listing, today)
         return max(months_until(expected, today, start=True), 0) if expected else 0
@@ -81,7 +91,11 @@ def months_to_handover(listing: Listing, today: date) -> Optional[int]:
 
 
 def plan_cashflows(listing: Listing, today: date) -> Optional[List[Tuple[int, float]]]:
-    """Payment plan as (months from today, share of price). Instalments are spread evenly."""
+    """Payment plan as (months from today, share of price).
+
+    Instalments the developer dates are costed on their dates, a date already passed as due now;
+    the rest of the construction share is spread evenly to handover.
+    """
     plan = listing.payment_plan
     if not plan:
         return None
@@ -92,7 +106,11 @@ def plan_cashflows(listing: Listing, today: date) -> Optional[List[Tuple[int, fl
     if plan.get("on_booking"):
         flows.append((0, plan["on_booking"] / 100))
     during = plan.get("during_construction", 0) / 100
-    if during:
+    for item in listing.instalments:
+        due = item["after_months"] if "after_months" in item else max(months_until(item["due"], today, start=True), 0)
+        flows.append((due, item["pct"] / 100))
+        during -= item["pct"] / 100
+    if during > UNDATED_FLOOR:
         if months == 0:
             flows.append((0, during))
         else:
@@ -122,4 +140,6 @@ def plan_value(listing: Listing, today: date, annual_rate: float) -> Optional[Pl
         booking_pct=plan.get("on_booking", 0),
         paid_before_handover_pct=plan.get("on_booking", 0) + plan.get("during_construction", 0),
         months_to_handover=months_to_handover(listing, today) or 0,
+        due_in_first_year=sum(share for month, share in flows if month <= FIRST_YEAR_MONTHS),
+        dated_pct=sum(item["pct"] for item in listing.instalments),
     )

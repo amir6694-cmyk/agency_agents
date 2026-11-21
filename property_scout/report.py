@@ -121,6 +121,7 @@ def _figures(a: Assessment, lang: str) -> List[tuple]:
         figures.append((t["own_funds"], aed(a.costs.own_funds, lang)))
     if a.cash_at_booking is not None:
         figures.append((t["cash_at_booking"], aed(a.cash_at_booking, lang)))
+        figures.append((t["cash_in_first_year"], aed(a.cash_in_first_year, lang)))
     if unbuilt(listing) and listing.price_psf and listing.ready_benchmark_psf:
         premium = pct(listing.price_psf / listing.ready_benchmark_psf - 1, signed=True, lang=lang)
         figures.append((t["ready_premium"], premium))
@@ -144,12 +145,23 @@ def _brief_line(result: Result, lang: str) -> str:
     )
 
 
+COUNTS = ("received", "unique", "ranked", "shortlisted", "held", "rejected")
+
+
+def _verdict_label(a: Assessment, lang: str) -> str:
+    """The verdict as a heading shows it: an offer held back from the shortlist says so, and by whom."""
+    if not a.held:
+        return UI[lang]["verdict." + a.verdict]
+    return UI[lang]["verdict.held_analyst" if a.listing.analyst_cap == "consider" else "verdict.held"]
+
+
 def _counts(result: Result) -> Dict[str, int]:
     return {
         "received": result.received,
         "unique": len(result.ranked) + len(result.rejected),
         "ranked": len(result.ranked),
         "shortlisted": sum(1 for a in result.ranked if a.verdict == "shortlist"),
+        "held": sum(1 for a in result.ranked if a.held),
         "rejected": len(result.rejected),
     }
 
@@ -178,6 +190,7 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
                 "observed_on": a.listing.observed_on,
                 "permit_number": a.listing.permit_number,
                 "verdict": a.verdict,
+                "held": a.held,
                 "score": a.score,
                 "completeness": a.confidence,
                 "price_aed": a.listing.price_aed,
@@ -189,6 +202,7 @@ def to_data(result: Result, lang: str = "en", top: Optional[int] = None) -> Dict
                 "own_funds_aed": _money(a.costs.own_funds) if a.costs.loan else None,
                 "loan_to_value_used": a.costs.ltv_used,
                 "cash_at_booking_aed": _money(a.cash_at_booking),
+                "cash_in_first_year_aed": _money(a.cash_in_first_year),
                 "plan_present_value_ratio": a.plan.present_value_ratio if a.plan else None,
                 "criteria": [
                     {
@@ -236,7 +250,7 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
         "",
         f"{t['as_of']} {long_date(result.as_of, lang)}. {_md(_brief_line(result, lang))}",
         "",
-        " · ".join(f"{t[key]}: {counts[key]}" for key in ("received", "unique", "ranked", "shortlisted", "rejected")),
+        " · ".join(f"{t[key]}: {counts[key]}" for key in COUNTS),
         "",
     ]
     if not ranked:
@@ -244,7 +258,7 @@ def to_markdown(result: Result, lang: str = "en", top: Optional[int] = None) -> 
     for index, a in enumerate(ranked, start=1):
         listing = a.listing
         lines += [
-            f"## {index}. {_md(listing.label)} — {t['verdict.' + a.verdict]} "
+            f"## {index}. {_md(listing.label)} — {_verdict_label(a, lang)} "
             f"({a.score:.1f}/100, {t['completeness'].lower()} {a.confidence:.0%})",
             "",
         ]
@@ -364,7 +378,7 @@ def _card(index: int, a: Assessment, result: Result, lang: str) -> str:
         "<section class='card'><div class='head'><div>"
         f"<h3><span class='rank'>{index:02d}</span>{escape(listing.label)}</h3>{lines}</div>"
         f"<div class='score'><b>{a.score:.1f}</b><div class='small'>{t['completeness']} {a.confidence:.0%}</div>"
-        f"<span class='badge'>{t['verdict.' + a.verdict]}</span></div></div>"
+        f"<span class='badge'>{_verdict_label(a, lang)}</span></div></div>"
         "<div class='figures'>" + "".join(f"<div><span>{k}</span><b>{v}</b></div>" for k, v in _figures(a, lang)) + "</div>"
         f"<h4>{t['criteria']}</h4><table>{''.join(rows)}</table>"
         + (f"<h4>{t['flags']}</h4><ul>{flags}</ul>" if flags else "")
@@ -380,7 +394,7 @@ def to_html(result: Result, lang: str = "en", top: Optional[int] = None) -> str:
     ranked = result.ranked[:top] if top else result.ranked
     stats = "".join(
         f"<div class='stat'><b>{counts[key]}</b>{t[key]}</div>"
-        for key in ("received", "unique", "ranked", "shortlisted", "rejected")
+        for key in COUNTS
     )
     cards = "".join(_card(i, a, result, lang) for i, a in enumerate(ranked, start=1)) or f"<p>{t['none_ranked']}</p>"
     rejected = ""
