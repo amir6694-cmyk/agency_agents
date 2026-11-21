@@ -39,6 +39,18 @@ NEWS_DOMAINS = [
     "arabianbusiness.com",
     "zawya.com",
 ]
+# Dubai districts whose registered sales and new leases put a studio's gross yield between 7.6% and 10.2%
+# on 21 November 2026 (Property Finder's transaction pages), highest first. A yield brief that names no
+# area starts here, not in the prime districts, where the same sum earns 6% to 7%.
+YIELD_DISTRICTS = (
+    "international-city",
+    "dubai-silicon-oasis",
+    "discovery-gardens",
+    "dubai-sports-city",
+    "dubai-production-city-impz",
+    "motor-city",
+    "jumeirah-village-circle",
+)
 FRESH = "the reader may serve a copy up to two weeks old: add cb= with any unused value to force a fresh read"
 EMPTY = (
     "a page titled for the whole emirate under a slug you know is valid means nothing matched: "
@@ -81,6 +93,11 @@ def _dubai_only(brief: Brief) -> bool:
     return (brief.emirates or ["dubai"]) == ["dubai"]
 
 
+def _yield_first(brief: Brief) -> bool:
+    """Income is the aim, the area is open, and registered rents can be read: only Dubai's finished homes qualify."""
+    return brief.purpose == "yield" and not brief.areas and brief.market != "offplan" and _dubai_only(brief)
+
+
 def notes(brief: Brief) -> List[Dict[str, Any]]:
     """What the plan could not express, so the gap is seen rather than assumed away."""
     remarks: List[str] = []
@@ -103,6 +120,11 @@ def notes(brief: Brief) -> List[Dict[str, Any]]:
         remarks.append(f"no page filters by sale type: keep only '{brief.sale_type}' adverts (cards are tagged First Sale or Re-Sale)")
     if brief.must_have or brief.exclude:
         remarks.append("must-haves and exclusions are not in any address: read them from each advert and record them as tags")
+    if _yield_first(brief):
+        remarks.append(
+            "a yield brief with no area is searched by yield, not by district: read the yield_scan pages first "
+            "and take the listings from the segments that lead them"
+        )
     return [{"step": "note", "check": remark} for remark in remarks]
 
 
@@ -185,6 +207,27 @@ def register_urls(brief: Brief) -> List[Dict[str, Any]]:
     ]
 
 
+def yield_scan_urls(brief: Brief) -> List[Dict[str, Any]]:
+    """Where registered rents are highest against registered prices, for a yield brief that leaves the area open."""
+    if not _yield_first(brief):
+        return []
+    beds = [b for b in _bed_options(brief) if b is not None][:2] or [0, 1]
+    return [
+        {
+            "step": "yield_scan",
+            "channel": "propertyfinder",
+            "url": f"{PF}/transactions/sold/dubai/{_bed_prefix(count)}apartments-{slug}",
+            "check": "rank before searching: the header prints the average price and, at district level, the average yield, "
+            "and lists the clusters or buildings with their sales counts; the same address under /rented/ gives the "
+            "average new rent; go one level down (add the cluster or building to the address) where sales are frequent, "
+            "take the median new 12-month rent over the median sold price, and open adverts only in the two or three "
+            "best segments, cheapest first",
+        }
+        for slug in YIELD_DISTRICTS
+        for count in beds
+    ]
+
+
 def benchmark_urls(brief: Brief) -> List[Dict[str, Any]]:
     """Registered sale and rent rows. Property Finder publishes them for Dubai only."""
     if not _dubai_only(brief):
@@ -250,6 +293,7 @@ def lead_queries(brief: Brief) -> List[Dict[str, Any]]:
 def search_plan(brief: Brief) -> List[Dict[str, Any]]:
     return (
         notes(brief)
+        + yield_scan_urls(brief)
         + listing_search_urls(brief)
         + new_project_urls(brief)
         + register_urls(brief)

@@ -2,7 +2,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from property_scout.brief import EMIRATES, PROPERTY_TYPES
 from property_scout.costs import GOLDEN_VISA_MIN_AED
-from property_scout.plan import EMIRATE_SLUG, MAX_BED_VARIANTS, NEW_PROJECT_TYPE_ID, PF, REGISTER_COPY, TYPE_SLUG, search_plan
+from property_scout.plan import EMIRATE_SLUG, MAX_BED_VARIANTS, NEW_PROJECT_TYPE_ID, PF, REGISTER_COPY, TYPE_SLUG, YIELD_DISTRICTS, search_plan
 
 
 def steps(plan, name):
@@ -175,3 +175,32 @@ class TestOtherSteps:
         for step in plan:
             assert step["check"]
             assert step["step"] == "note" or "url" in step or "query" in step
+
+
+class TestYieldFirst:
+    """A buyer who asks for income and names no area is shown where income is highest, before any advert."""
+
+    def test_a_yield_brief_with_no_area_starts_with_the_districts_ranked_by_yield(self, make_brief):
+        plan = search_plan(make_brief(purpose="yield", property_types=["apartment"], bedrooms_min=0, bedrooms_max=1))
+        scan = steps(plan, "yield_scan")
+        assert [step["url"] for step in scan[:2]] == [
+            f"{PF}/transactions/sold/dubai/studio-apartments-{YIELD_DISTRICTS[0]}",
+            f"{PF}/transactions/sold/dubai/1-bedroom-apartments-{YIELD_DISTRICTS[0]}",
+        ]
+        assert len(scan) == 2 * len(YIELD_DISTRICTS)
+        assert plan.index(scan[0]) < plan.index(steps(plan, "listings")[0])
+        assert "searched by yield" in remarks(plan)
+
+    def test_without_a_bedroom_count_studios_and_one_beds_are_scanned(self, make_brief):
+        scan = steps(search_plan(make_brief(purpose="yield")), "yield_scan")
+        assert {step["url"].rsplit("/", 1)[1].split("-apartments-")[0] for step in scan} == {"studio", "1-bedroom"}
+
+    def test_the_scan_is_not_offered_where_it_does_not_apply(self, make_brief):
+        for brief in (
+            make_brief(purpose="yield", areas=["Dubai Marina"]),
+            make_brief(purpose="growth"),
+            make_brief(purpose="yield", emirates=["abu_dhabi"]),
+            make_brief(purpose="yield", market="offplan"),
+        ):
+            plan = search_plan(brief)
+            assert steps(plan, "yield_scan") == [] and "searched by yield" not in remarks(plan)

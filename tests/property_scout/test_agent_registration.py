@@ -25,6 +25,7 @@ from property_scout.fields import LONG_TEXT, MAX_TEXT
 from property_scout.listing import ANALYST_CAPS, EVIDENCE, INSTALMENT_KEYS, PLAN_STAGES, Listing
 from property_scout.messages import UI
 from property_scout.metrics import FIRST_YEAR_MONTHS
+from property_scout.plan import YIELD_DISTRICTS, search_plan
 from property_scout.scoring import (
     ASSUMED_YIELD_LOSS,
     BEHIND_SCHEDULE_GAP,
@@ -200,6 +201,14 @@ class TestDefinitionMatchesEngine:
         assert [key for key in INSTALMENT_KEYS if f'"{key}"' not in record] == []
         assert FIRST_YEAR_MONTHS == 12 and "what falls due in the first twelve months" in definition
         assert "counts only when it raises the score" in section(definition, "### Rubric")
+
+    def test_describes_the_search_by_yield_the_plan_starts_with(self, definition):
+        how = section(definition, "### Searching by yield")
+        assert "`yield_scan`" in how
+        named = how.lower().replace("(", "").replace(")", "")
+        assert [slug for slug in YIELD_DISTRICTS if slug.replace("-", " ") not in named] == []
+        brief = Brief.from_dict({"budget_max": 650_000, "purpose": "yield"})
+        assert next(step["step"] for step in search_plan(brief) if step["step"] != "note") == "yield_scan"
 
     def test_describes_how_rows_are_left_out_of_a_benchmark(self, definition):
         args = build_parser().parse_args(["comps", "--rows", "rows.json", "--exclude-project", "Tower A"])

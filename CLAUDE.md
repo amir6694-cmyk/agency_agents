@@ -222,7 +222,7 @@ second-brain stats
 | Sub-command | Purpose |
 |-------------|---------|
 | `template`  | Print an example brief, or a ready and an off-plan example listing |
-| `plan`      | Turn a brief into the portal pages and search queries to open |
+| `plan`      | Turn a brief into the portal pages and search queries to open; a yield brief with no area starts with `yield_scan` steps over `YIELD_DISTRICTS`, ranked by registered yield |
 | `comps`     | Median price per sqft from raw sold or rent rows (size band, look-back window, completion status, `--new-leases`, `--exclude-project`, a per-row `excluded` reason), with the date span and the largest project's share |
 | `costs`     | Itemised acquisition costs and own funds for one purchase (`--community`, `--nationality`, `--first-home`, `--waived`) |
 | `score`     | Filter, de-duplicate, score and rank listings; `--format json|md|html`, `--lang en|ru` |
@@ -258,7 +258,7 @@ property-scout score --brief brief.json --listings listings.json --format html -
 
 | Job | Scope |
 |---|---|
-| `tests (narrow: hackingtool + second_brain)` | 1132 tests on Python 3.9, 3.12, 3.14 from `tests/hackingtool`, `tests/test_second_brain.py` and `tests/property_scout`, plus an import smoke of all four packages and a CLI smoke of `hackingtool`, `second-brain` and `property-scout`. The job name predates `property_scout` and is kept so required status checks do not break |
+| `tests (narrow: hackingtool + second_brain)` | 1136 tests on Python 3.9, 3.12, 3.14 from `tests/hackingtool`, `tests/test_second_brain.py` and `tests/property_scout`, plus an import smoke of all four packages and a CLI smoke of `hackingtool`, `second-brain` and `property-scout`. The job name predates `property_scout` and is kept so required status checks do not break |
 | `checks (coverage, network isolation, hygiene)` | Coverage floor 65% on the gated packages, a guard proving no gated test performs real network or subprocess I/O, a tracked-artifact check, and a floor on the gate's own test count |
 
 **What it does NOT gate.** The 8 `agent_router` test files are still excluded; the only router behaviour in the gate is the UAE Property Scout's registration and routing (`tests/property_scout/test_agent_registration.py`). They used to contribute 254 failures, every one an `AgentConfigError` from absolute `file_path` values; with paths now resolved against the project root (see "Agent File Paths" below) they contribute 3. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
