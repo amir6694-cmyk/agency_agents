@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Type
 MAX_TEXT = 600
 LONG_TEXT = 2000
 MAX_NUMBER = 1e12
+MAX_SHOWN = 200
 # Line breaks, control and bidirectional-override characters, and lone surrogates.
 _CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
 _ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
@@ -17,13 +18,22 @@ class InputError(ValueError):
     pass
 
 
+def _shown(value: Any) -> str:
+    """A value as an error message may quote it: bounded, and safe for input nested past the interpreter's depth."""
+    try:
+        text = repr(value)
+    except RecursionError:
+        return "a deeply nested value"
+    return text if len(text) <= MAX_SHOWN else text[:MAX_SHOWN] + "..."
+
+
 class Check:
     def __init__(self, error: Type[InputError], where: str):
         self.error = error
         self.where = where
 
     def fail(self, name: str, problem: str, value: Any) -> InputError:
-        return self.error(f"{self.where}: {name} {problem}, got {value!r}")
+        return self.error(f"{self.where}: {name} {problem}, got {_shown(value)}")
 
     def text(self, name: str, value: Any, limit: int = MAX_TEXT) -> str:
         if value is None:

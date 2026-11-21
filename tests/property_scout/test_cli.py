@@ -106,10 +106,23 @@ class TestScore:
         err = output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
         assert "appears twice" in err and "evidence, price_aed" in err
 
-    def test_absurd_input_ends_in_an_error_line_not_a_traceback(self, files, output):
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "[" * 100_000 + "]" * 100_000,
+            '[{"url": "https://x.example/1", "price_aed": 1850000, "evidence": "page", "tags": ' + "[" * 100_000 + "]" * 100_000 + "}]",
+            '{"listings": ' + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "}",
+        ],
+    )
+    def test_input_nested_past_any_sense_ends_in_one_error_line(self, files, output, text):
+        """Which step gives up on such a file differs between interpreter versions; a traceback is never the answer."""
         brief, listings, _ = files
-        listings.write_text("[" * 100_000 + "]" * 100_000)
-        assert "nested too deeply" in output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+        listings.write_text(text)
+        err = output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
+        assert err.startswith("error: ") and len(err.splitlines()) == 1 and len(err) < 600
+
+    def test_absurd_numbers_end_in_an_error_line_not_a_traceback(self, files, output):
+        brief, listings, _ = files
         listings.write_text('[{"url": "https://x.example/1", "evidence": "page", "price_aed": 1' + "0" * 400 + "}]")
         assert "price_aed must be a number" in output("score", "--brief", str(brief), "--listings", str(listings), code=2).err
 

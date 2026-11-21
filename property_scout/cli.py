@@ -128,8 +128,6 @@ def _read_json(path: str) -> Any:
             return json.load(handle, object_pairs_hook=unique)
         except json.JSONDecodeError as exc:
             raise InputError(f"{path} is not valid JSON: {exc}") from exc
-        except RecursionError:
-            raise InputError(f"{path} is nested too deeply to be a brief, a listings file or a rows file") from None
 
 
 def _emit(text: str, out: Optional[str]) -> None:
@@ -334,6 +332,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return args.handler(args)
     except (InputError, OSError, ValueError, ArithmeticError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except RecursionError:
+        # Whether the parser or a later step gives up on such a file depends on the interpreter.
+        print("error: the input is nested too deeply to be a brief, a listings file or a rows file", file=sys.stderr)
         return 2
 
 

@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from property_scout.fields import LONG_TEXT, MAX_NUMBER, MAX_TEXT, Check, InputError
+from property_scout.fields import LONG_TEXT, MAX_NUMBER, MAX_SHOWN, MAX_TEXT, Check, InputError
 
 
 class Refused(InputError):
@@ -41,6 +41,20 @@ class TestText:
         assert check.text("notes", "x" * LONG_TEXT, LONG_TEXT)
         with pytest.raises(Refused, match=f"longer than {LONG_TEXT}"):
             check.text("notes", "x" * (LONG_TEXT + 1), LONG_TEXT)
+
+
+class TestQuotedValues:
+    def test_a_long_value_is_quoted_in_part(self, check):
+        with pytest.raises(Refused) as caught:
+            check.number("price", "9" * 5_000)
+        assert len(str(caught.value)) < MAX_SHOWN + 80 and str(caught.value).endswith("...")
+
+    def test_a_value_nested_past_the_interpreters_depth_is_named_not_printed(self, check):
+        nested = []
+        for _ in range(100_000):
+            nested = [nested]
+        with pytest.raises(Refused, match="must be text"):
+            check.text("title", nested)
 
 
 class TestNumber:
