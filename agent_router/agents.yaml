@@ -1214,3 +1214,48 @@ real-estate:
       workflow_rules:
         total: 11
         mandatory: true
+
+trading:
+  - name: MT5 Gold Trader
+    description: Risk-first trading desk for gold (XAUUSD) on MetaTrader 5 that sizes each trade from the terminal's specification, checks it against daily and overall loss limits, plans stops and targets with ATR, and reviews a journal of closed trades
+    keywords:
+      - gold
+      - gold trade
+      - gold trading
+      - gold position
+      - gold setup
+      - xauusd
+      - xau/usd
+      - xau
+      - mt5
+      - metatrader
+      - metatrader 5
+      - meta trader
+      - trader 5
+      - lot size
+      - position size
+      - position sizing
+      - stop loss
+      - take profit
+      - risk per trade
+      - risk reward
+      - prop firm
+      - daily loss limit
+      - max drawdown
+      - trading journal
+      - trade journal
+      - trade plan
+      - trading plan
+      - pips
+      - scalping
+      - swing trade
+      - forex
+    file_path: agents/trading/trading-mt5-gold-trader.md
+    category: trading
+    is_default: false
+    protocols:
+      requirements_gathering_first: true
+      test_first_development: false
+      workflow_rules:
+        total: 11
+        mandatory: true

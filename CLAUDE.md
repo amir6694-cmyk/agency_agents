@@ -2,14 +2,15 @@
 
 ## Repository Overview
 
-This repository is an **intelligent agent routing and tooling system** with four main components:
+This repository is an **intelligent agent routing and tooling system** with five main components:
 
 1. **`agent_router/`** — Routes tasks to the appropriate specialized agent via keyword scoring
 2. **`second_brain/`** — Persistent JSON-backed knowledge store for cross-session agent memory
 3. **`hackingtool/`** — CLI security research framework (WHOIS, DNS, port scanning, crypto, OSINT, CTF, forensics)
 4. **`property_scout/`** — Deterministic underwriting and ranking engine for UAE property listings, called by the UAE Property Scout agent
+5. **`trade_desk/`** — Deterministic position sizing, loss-limit checks, ATR and journal review for MetaTrader 5, called by the MT5 Gold Trader agent
 
-It also contains **`agents/`**, a library of 56 Claude agent definition markdown files (42 registered in `agents.yaml`), and **`protocols/`**, mandatory development workflow documentation.
+It also contains **`agents/`**, a library of 57 Claude agent definition markdown files (43 registered in `agents.yaml`), and **`protocols/`**, mandatory development workflow documentation.
 
 ---
 
@@ -59,6 +60,19 @@ agency_agents/
 │   ├── report.py           # JSON, Markdown and self-contained HTML output
 │   └── cli.py              # `property-scout` entry point
 │
+├── trade_desk/             # MT5 risk engine (stdlib-only runtime; reuses property_scout.fields and its JSON reader)
+│   ├── records.py          # Strict JSON record reader, currency codes, ISO or MetaTrader timestamps
+│   ├── spec.py             # Symbol: the terminal's contract specification
+│   ├── account.py          # Account and OpenPosition: balance, equity, risk, loss limits
+│   ├── trade.py            # Trade: side, entry, stop, target, spread, slippage, rollovers
+│   ├── sizing.py           # Lot size from the risk budget, costs, margin
+│   ├── guard.py            # Flags, loss floors, margin checks, verdict (go, review, blocked)
+│   ├── messages.py         # Every sentence a flag renders to
+│   ├── atr.py              # True range and ATR (MT5's simple average, or Wilder), ATR stops
+│   ├── journal.py          # Closed-trade statistics: win rate, profit factor, R, drawdown, streaks
+│   ├── report.py           # JSON and Markdown output
+│   └── cli.py              # `trade-desk` entry point
+│
 ├── agents/                 # Claude agent personality definition files (.md)
 │   ├── design/             # 6 agents (UI Designer, UX Architect, UX Researcher, etc.)
 │   ├── engineering/        # 7 agents (Senior Developer [default], Frontend, Backend, AI, etc.)
@@ -70,9 +84,10 @@ agency_agents/
 │   ├── spatial-computing/  # 6 agents (visionOS, XR Immersive, XR Interface, XR Cockpit, macOS Metal, Terminal)
 │   ├── specialized/        # 4 agents (Agents Orchestrator, Second Brain Manager, LSP Engineer, Data Analytics Reporter)
 │   ├── support/            # 6 agents (Analytics, Finance, Legal, Infrastructure, etc.)
-│   └── testing/            # 7 agents (Reality Checker, API Tester, Performance, etc.)
+│   ├── testing/            # 7 agents (Reality Checker, API Tester, Performance, etc.)
+│   └── trading/            # 1 agent (MT5 Gold Trader)
 │
-├── .claude/agents/         # Agents installed for Claude Code (uae-property-scout.md, a copy of the source)
+├── .claude/agents/         # Agents installed for Claude Code (uae-property-scout.md, mt5-gold-trader.md: copies of the sources)
 ├── .github/workflows/      # CI: ci.yml (narrow gate, see Continuous Integration)
 │
 ├── protocols/              # Mandatory workflow documentation
@@ -81,9 +96,9 @@ agency_agents/
 │   ├── TEST-FIRST-DEVELOPMENT.md          # TDD standards (352 lines)
 │   └── GIT-WORKFLOW-PROTOCOL.md           # Git hygiene (4 mandatory checks)
 │
-├── tests/                  # Pytest test suite (9 .py files + hackingtool/ and property_scout/ module tests)
+├── tests/                  # Pytest test suite (9 .py files + hackingtool/, property_scout/ and trade_desk/ module tests)
 ├── templates/              # project-brief-template.md
-├── setup.py                # Package config (v0.4.0, Python >=3.9)
+├── setup.py                # Package config (v0.5.0, Python >=3.9)
 ├── conftest.py             # Root: adds project root to sys.path
 ├── batch_test_agents.py    # Utility: batch-test routing for specific agents
 ├── CONTRIBUTING.md         # Contribution guidelines
@@ -114,7 +129,7 @@ Python requirement: **>=3.9**. Use a virtual environment — activate it before 
 
 ```bash
 # Full test suite with coverage
-pytest tests/ -v --cov=agent_router --cov=second_brain --cov=hackingtool --cov=property_scout
+pytest tests/ -v --cov=agent_router --cov=second_brain --cov=hackingtool --cov=property_scout --cov=trade_desk
 
 # Run a specific test file
 pytest tests/test_agent_router.py -v
@@ -248,6 +263,37 @@ property-scout costs --price 2000000 --emirate dubai --sale-type resale --financ
 property-scout score --brief brief.json --listings listings.json --format html --lang ru --out shortlist.html
 ```
 
+### Trade Desk (`trade_desk/`)
+
+- Entry point: `trade-desk` CLI (`python -m trade_desk`); **zero runtime external dependencies**. Imports `Check`, `InputError` and `_shown` from `property_scout.fields` and `_read_json`, `_emit` from `property_scout.cli` rather than duplicating them
+- The MT5 Gold Trader agent reads the terminal (or a connected MT5 connector) and writes three JSON records; this engine does everything that must be reproducible: validation, sizing, loss floors, margin, verdicts, ATR, journal statistics. It never places orders
+
+| Sub-command | Purpose |
+|-------------|---------|
+| `template`  | Print an example `symbol`, `account`, `trade`, `journal` or `candles` file; the first three together give `go` |
+| `check`     | Size one trade and judge it against the account: `--format json|md`, `--out` |
+| `size`      | Lot size from equity and risk alone, no limits checked (`--json`) |
+| `atr`       | ATR from candles (`--method sma` matches MT5's built-in ATR, `wilder`), optional stop `--multiple` ATRs away on the tick grid |
+| `journal`   | Win rate, payoff, profit factor, expectancy in money and R, drawdown, streaks, buys against sells; `--start-balance` |
+
+- **Records are validated at the boundary** (`records.Reader`): unknown fields named, required ones enforced, no coercion. `open_positions` is required (`[]` when flat). An open position gives either `price_current` and `stop`, priced by the engine, or `risk_to_stop`; never both
+- **Sizing** (`sizing.py`): budget is `risk_pct` of the lower of balance and equity; loss per lot is (stop distance + slippage) × `tick_value / tick_size` + commission + swap charges; lots are rounded down to `volume_step` (with `STEP_EPSILON` against float noise), cut to `volume_max`, zero below `volume_min`. A swap credit is never counted
+- **Verdict** (`guard.py`): each flag has a level in `LEVELS` (`block`, `hold`, `info`); any block gives `blocked`, any hold `review`, else `go`. **A gap never gives go**: every optional field whose value could raise a flag raises a hold when absent. `tests/trade_desk/test_desk_invariants.py` drops every optional field, singly and in pairs, from generated records and fails if a drop ever yields `go`. The one stated assumption: a leverage margin estimate is trusted only when `MARGIN_ESTIMATE_FACTOR` times it still clears
+- **Floors**: daily = `day_start_balance` less `daily_loss_pct` of the initial or day-start balance; overall = `initial_balance` (static) or `high_water` (trailing) less `max_loss_pct` of `initial_balance`. An unstated basis or mode uses the stricter floor and holds. `lots_that_fit` is the most volume the floors allow
+- **Spec check**: `tick_value / (contract_size × tick_size)` must be within `SPEC_TOLERANCE` of 1 (same currency) or of `conversion_rate`, which catches a wrong contract size before it sizes a trade ten times too large
+- **Messages** (`messages.py`): the guard emits a code and its figures; `TEXT` holds the sentence. `TEXT`, `LEVELS` and the test scenarios must cover the same codes (tested)
+- **The agent definition quotes the engine** (every threshold, every record field and choice, every flag and level, every example command). `tests/trade_desk/test_desk_agent.py` fails when they drift apart
+- **Independent arithmetic check**: `bash tests/validation/test_trade_desk_math.sh` recomputes sizes, floors, ATR and journal figures with awk and compares them with the CLI's output
+- Test files are prefixed `test_desk_` and shared data lives in `tests/trade_desk/desk_examples.py`: the test folders have no `__init__.py`, so basenames must be unique across `tests/`
+
+```bash
+python -m trade_desk template symbol > symbol.json
+python -m trade_desk check --symbol symbol.json --account account.json --trade trade.json --format md
+python -m trade_desk size --symbol symbol.json --equity 10000 --risk 0.5 --side buy --entry 4452.30 --stop 4440.30
+python -m trade_desk atr --candles h1.json --period 14 --multiple 1.5 --side buy --entry 4452.30 --tick-size 0.01
+python -m trade_desk journal --trades closed.json --start-balance 10000 --format md
+```
+
 ---
 
 ## Continuous Integration
@@ -258,10 +304,10 @@ property-scout score --brief brief.json --listings listings.json --format html -
 
 | Job | Scope |
 |---|---|
-| `tests (narrow: hackingtool + second_brain)` | 1136 tests on Python 3.9, 3.12, 3.14 from `tests/hackingtool`, `tests/test_second_brain.py` and `tests/property_scout`, plus an import smoke of all four packages and a CLI smoke of `hackingtool`, `second-brain` and `property-scout`. The job name predates `property_scout` and is kept so required status checks do not break |
+| `tests (narrow: hackingtool + second_brain)` | 1544 tests on Python 3.9, 3.12, 3.14 from `tests/hackingtool`, `tests/test_second_brain.py`, `tests/property_scout` and `tests/trade_desk`, plus an import smoke of all five packages and a CLI smoke of `hackingtool`, `second-brain`, `property-scout` and `trade-desk`. The job name predates `property_scout` and is kept so required status checks do not break |
 | `checks (coverage, network isolation, hygiene)` | Coverage floor 65% on the gated packages, a guard proving no gated test performs real network or subprocess I/O, a tracked-artifact check, and a floor on the gate's own test count |
 
-**What it does NOT gate.** The 8 `agent_router` test files are still excluded; the only router behaviour in the gate is the UAE Property Scout's registration and routing (`tests/property_scout/test_agent_registration.py`). They used to contribute 254 failures, every one an `AgentConfigError` from absolute `file_path` values; with paths now resolved against the project root (see "Agent File Paths" below) they contribute 3. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
+**What it does NOT gate.** The 8 `agent_router` test files are still excluded; the only router behaviour in the gate is the registration and routing of the UAE Property Scout and the MT5 Gold Trader (`tests/property_scout/test_agent_registration.py`, `tests/trade_desk/test_desk_agent.py`). They used to contribute 254 failures, every one an `AgentConfigError` from absolute `file_path` values; with paths now resolved against the project root (see "Agent File Paths" below) they contribute 3. The job names say "narrow" so a green check is never mistaken for a green repo: a PR touching only `agent_router/`, `agents.yaml`, or `protocols.py` gets a passing CI that proves nothing about the change.
 
 **Widening the gate** needs two product decisions, not more mechanical work. The three remaining failures are:
 
@@ -270,7 +316,7 @@ property-scout score --brief brief.json --listings listings.json --format html -
 
 Settle the agent count and the protocol-flag contradiction, then replace the gate paths with `tests/` and drop "narrow" from the job names.
 
-**Coverage is a regression guard, not a correctness signal.** Measured 85% on the gated packages against a 65% floor. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
+**Coverage is a regression guard, not a correctness signal.** Measured 85% on the gated packages against a 65% floor before `trade_desk` joined; `trade_desk` alone measured 98% of lines with the standard-library tracer. Line coverage overstates rigour here: `second_brain/memory.py` reports 100% while its documented atomic-write invariant has no test — replacing `os.replace` with a non-atomic copy leaves the suite green.
 
 **Python floor is 3.9, not 3.8.** Ten modules use PEP 585 builtin generics (`list[tuple]`, `dict[str, str]`) in runtime-evaluated annotations without `from __future__ import annotations`, so 3.8 aborts collection with import errors before any test runs. `setup.py` declares `>=3.9` accordingly. The 3.9 job runs on `ubuntu-24.04` rather than `ubuntu-latest`: the 26.04 image has no 3.9 build for `setup-python`, so the floor is tested on the last image that ships it.
 
@@ -337,7 +383,7 @@ The body contains the agent's identity, mission, tools, workflow, and communicat
 
 ### Agents Installed for Claude Code
 
-`.claude/agents/uae-property-scout.md` is a byte-for-byte copy of `agents/real-estate/real-estate-uae-property-scout.md`, so a Claude Code session opened in this repository can delegate to the agent. Edit the source under `agents/`, then copy it over; a test fails when the two differ.
+`.claude/agents/uae-property-scout.md` is a byte-for-byte copy of `agents/real-estate/real-estate-uae-property-scout.md`, and `.claude/agents/mt5-gold-trader.md` of `agents/trading/trading-mt5-gold-trader.md`, so a Claude Code session opened in this repository can delegate to either agent. Edit the source under `agents/`, then copy it over; a test fails when the two differ.
 
 ### Known Issue: Unregistered Agent Files
 
@@ -374,6 +420,11 @@ Edit `AgentRouter._calculate_agent_score` in `agent_router/router.py`. Keyword s
 2. Update the matching sentence or table in `agents/real-estate/real-estate-uae-property-scout.md` and copy the file to `.claude/agents/uae-property-scout.md`; a fee change also needs its line in `tests/validation/test_property_scout_math.sh`
 3. Run `pytest tests/property_scout -q`; the registration tests name any figure the definition still states differently
 
+### Change a trade_desk threshold or flag
+1. Edit the constant or `LEVELS` in `trade_desk/guard.py`; a new flag also needs its sentence in `trade_desk/messages.py` and a scenario in `tests/trade_desk/test_desk_guard.py`
+2. Update the Rubric or Flags table in `agents/trading/trading-mt5-gold-trader.md` and copy it to `.claude/agents/mt5-gold-trader.md`
+3. Run `pytest tests/trade_desk -q`; the agent tests name any figure or flag the definition states differently
+
 ### Register an unregistered agent
 Add to `agent_router/agents.yaml`:
 ```yaml
@@ -405,3 +456,5 @@ Add to `agent_router/agents.yaml`:
 - Do not coerce input in `property_scout`: add the check to `fields.py` and let the wrong value be named
 - Do not add a field to `Brief` or `Listing` without naming it in the agent definition; the registration tests list what is missing
 - Do not add a fee to `property_scout/costs.py` from memory or a broker page; read it from the emirate's own schedule and say where
+- Do not give a `trade_desk` field a default that hides a gap: a field whose value can raise a flag must raise a hold when it is absent, or the invariants test fails
+- Do not put broker specifications, commissions or swaps into `trade_desk` or the MT5 Gold Trader definition as facts; they come from the trader's terminal

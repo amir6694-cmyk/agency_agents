@@ -43,11 +43,33 @@ In a Claude Code session opened in this repository, describe what the buyer want
 
 ---
 
+## 🥇 MT5 Gold Trader
+
+A risk-first trading desk for gold (XAUUSD) on MetaTrader 5, with a deterministic engine behind it. It never places trades.
+
+- **Agent**: `agents/trading/trading-mt5-gold-trader.md`, also installed for Claude Code at `.claude/agents/mt5-gold-trader.md`. Give it a trade idea and it reads the symbol specification and the account from the terminal, places the stop at the invalidation level, sizes the trade, and returns **go**, **review** or **blocked** against the account's daily and overall loss limits, prop firm or personal.
+- **Engine**: `trade_desk/`, a stdlib-only package. The lot size is rounded down to the broker's volume step so the loss at the stop, commission, slippage and swap included, never exceeds the risk budget. Anything the records leave out that affects risk sends the trade to review: a generated test drops every optional field, singly and in pairs, and fails if one ever lets a trade through.
+
+```bash
+pip install -e ".[dev]"
+trade-desk template symbol > symbol.json
+trade-desk template account > account.json
+trade-desk template trade > trade.json
+trade-desk check --symbol symbol.json --account account.json --trade trade.json --format md
+trade-desk size --symbol symbol.json --equity 10000 --risk 0.5 --side buy --entry 4452.30 --stop 4440.30 --target 4476.30
+trade-desk atr --candles h1.json --period 14 --multiple 1.5 --side buy --entry 4452.30 --tick-size 0.01
+trade-desk journal --trades closed.json --start-balance 10000 --format md
+```
+
+In a Claude Code session opened in this repository, describe the trade and the session delegates to the `mt5-gold-trader` agent.
+
+---
+
 ## 📚 Repository Structure
 
 ```
 agency_agents/
-├── agents/                    # All agent definitions (51 agents)
+├── agents/                    # All agent definitions (57 agents)
 │   ├── design/               # 6 design agents
 │   ├── engineering/          # 7 engineering agents
 │   ├── marketing/            # 8 marketing agents
@@ -56,7 +78,8 @@ agency_agents/
 │   ├── spatial-computing/    # 6 XR/spatial agents
 │   ├── specialized/          # 3 specialized agents
 │   ├── support/              # 6 support agents
-│   └── testing/              # 7 testing agents
+│   ├── testing/              # 7 testing agents
+│   └── trading/              # 1 trading agent (MT5 Gold Trader)
 ├── protocols/                 # Protocol documentation (2,849 lines)
 │   ├── REQUIREMENTS-GATHERING-PROTOCOL.md (463 lines)
 │   ├── TEST-FIRST-DEVELOPMENT.md (352 lines)

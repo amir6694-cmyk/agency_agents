@@ -6,8 +6,8 @@ from setuptools import setup, find_packages
 
 setup(
     name='agency_agents',
-    version='0.4.0',
-    description='Intelligent task routing, persistent knowledge, security research tooling, and UAE property underwriting',
+    version='0.5.0',
+    description='Intelligent task routing, persistent knowledge, security research tooling, UAE property underwriting, and MT5 trade risk checks',
     author='Agency Agents',
     packages=find_packages(),
     python_requires='>=3.9',
@@ -25,6 +25,7 @@ setup(
             'second-brain=second_brain.cli:main',
             'hackingtool=hackingtool.cli:main',
             'property-scout=property_scout.cli:main',
+            'trade-desk=trade_desk.cli:main',
         ],
     },
     package_data={

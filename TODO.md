@@ -1,6 +1,6 @@
 # Agency Agents Project To-Do List
 
-Last Updated: 2026-11-21
+Last Updated: 2026-11-23
 
 ## In Progress
 - No tasks currently in progress
@@ -9,6 +9,13 @@ Last Updated: 2026-11-21
 - No pending tasks
 
 ## Recent Updates
+- [x] Add MT5 Gold Trader agent and trade_desk engine
+  - Completed: 2026-11-23
+  - Added: agents/trading/trading-mt5-gold-trader.md, registered in agents.yaml (trading category) and installed at .claude/agents/
+  - Added: trade_desk/ (template, check, size, atr, journal) with tests in tests/trade_desk/, joined to the CI gate (baseline 1136 -> 1544)
+  - Tests written first and approved before implementation (Rule 1)
+  - Verified: 408 trade_desk tests, including every optional field dropped singly and in pairs with no lift to go; awk recomputation (25 checks); 98% line coverage; router suite unchanged at its 3 known failures
+
 - [x] Fifth revision of property_scout: gaps a wider probe still lifted, and what the trial agents asked for
   - Completed: 2026-11-21
   - Branch: claude/practical-gauss-1au7f9
