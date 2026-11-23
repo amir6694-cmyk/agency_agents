@@ -11,8 +11,7 @@ TEXT = {
     ),
     "limit_breached": "Equity of {equity:,.2f} is already at or below the {floor} loss floor of {level:,.2f}: no new trade.",
     "limit_would_breach": (
-        "If every stop is hit, equity falls to {worst:,.2f}, below the {floor} loss floor of {level:,.2f}; "
-        "at most {lots_that_fit:g} lots fit."
+        "If every stop is hit, equity falls to {worst:,.2f}, below the {floor} loss floor of {level:,.2f}; {fit}."
     ),
     "margin_insufficient": "The position needs {margin:,.2f} of margin and only {free:,.2f} is free.",
     "open_without_stop": (
@@ -56,5 +55,12 @@ TEXT = {
 }
 
 
+def _fit(lots: float) -> str:
+    return "no volume fits until the floor resets" if not lots else f"at most {lots:g} lots fit"
+
+
 def render(flag) -> str:
-    return TEXT[flag.code].format(**flag.params)
+    params = dict(flag.params)
+    if "lots_that_fit" in params:
+        params["fit"] = _fit(params["lots_that_fit"])
+    return TEXT[flag.code].format(**params)
