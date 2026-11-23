@@ -154,6 +154,12 @@ class TestBlocks:
         text = render(next(f for f in result.flags if f.code == "limit_would_breach"))
         assert "9,500.00" in text and "0.01" in text
 
+    def test_when_nothing_fits_the_sentence_says_so(self, records):
+        result = judged(records, account={"equity": 9_510})
+        assert result.verdict == "blocked" and result.lots_that_fit == 0
+        text = render(next(f for f in result.flags if f.code == "limit_would_breach"))
+        assert "no volume fits" in text and "0 lots" not in text
+
     def test_open_risk_counts_against_the_floors(self, records):
         result = judged(records, account={"open_positions": [GOLD_LONG]})
         assert result.open_risk == pytest.approx(0.2 * 10 * 100)

@@ -15,6 +15,7 @@ Last Updated: 2026-11-23
   - Added: trade_desk/ (template, check, size, atr, journal) with tests in tests/trade_desk/, joined to the CI gate (baseline 1136 -> 1544)
   - Tests written first and approved before implementation (Rule 1)
   - Verified: 408 trade_desk tests, including every optional field dropped singly and in pairs with no lift to go; awk recomputation (25 checks); 98% line coverage; router suite unchanged at its 3 known failures
+  - Fixed after the first live dry run: the definition's evidence-date gold price (spot was near 3,620, not 4,455); a blocked trade with no room now reads "no volume fits until the floor resets" instead of "at most 0 lots fit" (tested; gate baseline 1545)
 
 - [x] Fifth revision of property_scout: gaps a wider probe still lifted, and what the trial agents asked for
   - Completed: 2026-11-21
